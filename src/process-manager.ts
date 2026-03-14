@@ -58,15 +58,29 @@ import path from "path";
    }
  
   async start(options: StartOptions): Promise<ProcessState[]> {
-        
+    // Prevent duplicate processes — remove ALL existing with the same name (running or stopped)
+    if (options.name) {
+      const existing = Array.from(this.processes.values()).filter(
+        (p) => p.getState().name === options.name
+      );
+      for (const container of existing) {
+        const state = container.getState();
+        if (state.status !== "stopped") {
+          await container.stop(true);
+        }
+        console.error(`[bm2] Removing duplicate "${options.name}" (id=${container.id}) before starting new instance`);
+        this.processes.delete(container.id);
+      }
+    }
+
     const resolvedInstances = this.clusterManager.resolveInstances(options.instances);
     const isCluster = options.execMode === "cluster" || resolvedInstances > 1;
     const states: ProcessState[] = [];
-    
-    options.script = path.isAbsolute(options.script) 
+
+    options.script = path.isAbsolute(options.script)
       ? options.script
       : path.join(options.cwd!, options.script);
-        
+
     if (!(await Bun.file(options.script).exists())) {
       throw new Error(`Script not found: ${options.script}`);
     }
@@ -326,10 +340,12 @@ import path from "path";
    }
  
    async save(): Promise<void> {
-     const data = Array.from(this.processes.values()).map((p) => ({
-       config: p.config,
-       restartCount: p.restartCount,
-     }));
+     // Deduplicate by name — keep only the last (newest) entry per name
+     const seen = new Map<string, { config: any; restartCount: number }>();
+     for (const p of this.processes.values()) {
+       seen.set(p.config.name, { config: p.config, restartCount: p.restartCount });
+     }
+     const data = Array.from(seen.values());
      await Bun.write(DUMP_FILE, JSON.stringify(data, null, 2));
    }
  
