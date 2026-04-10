@@ -24,17 +24,15 @@ import { LogManager } from "./log-manager";
 import { ClusterManager } from "./cluster-manager";
 import { HealthChecker } from "./health-checker";
 import { CronManager } from "./cron-manager";
+import { ResourceMonitor } from "./resource-monitor";
+import { LogStreamPiper } from "./log-stream-piper";
 import { treeKill } from "./utils";
 import { join } from "path";
 import {
   PID_DIR,
-  MONITOR_INTERVAL,
   DEFAULT_LOG_MAX_SIZE,
   DEFAULT_LOG_RETAIN,
 } from "./constants";
-import pidusage from "pidusage";
-import { readdir } from "node:fs/promises";
-
 
 export class ProcessContainer {
   public id: number;
@@ -57,9 +55,10 @@ export class ProcessContainer {
   private clusterManager: ClusterManager;
   private healthChecker: HealthChecker;
   private cronManager: CronManager;
+  private resourceMonitor = new ResourceMonitor();
+  private logStreamPiper: LogStreamPiper;
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
   private watcher: ReturnType<typeof import("fs").watch> | null = null;
-  private monitorInterval: ReturnType<typeof setInterval> | null = null;
   private logRotateInterval: ReturnType<typeof setInterval> | null = null;
   private isRestarting: boolean = false;
 
@@ -78,6 +77,7 @@ export class ProcessContainer {
     this.clusterManager = clusterManager;
     this.healthChecker = healthChecker;
     this.cronManager = cronManager;
+    this.logStreamPiper = new LogStreamPiper((filePath, data) => this.logManager.appendLog(filePath, data));
     this.createdAt = Date.now();
   }
 
@@ -93,7 +93,6 @@ export class ProcessContainer {
     );
 
     try {
-      // Ensure log files exist
       for (const f of [logPaths.outFile, logPaths.errFile]) {
         const file = Bun.file(f);
         if (!(await file.exists())) await Bun.write(f, "");
@@ -108,7 +107,6 @@ export class ProcessContainer {
       this.startedAt = Date.now();
       this.status = "online";
 
-      // Write PID file
       if (this.pid) {
         await Bun.write(
           join(PID_DIR, `${this.name}-${this.id}.pid`),
@@ -116,18 +114,13 @@ export class ProcessContainer {
         );
       }
 
-      // Start monitoring
       this.startMonitoring();
-
-      // Start log rotation
       this.startLogRotation(logPaths);
 
-      // Setup watch mode
       if (this.config.watch) {
         this.setupWatch();
       }
 
-      // Setup health checks
       if (this.config.healthCheckUrl) {
         this.healthChecker.startCheck(
           this.id,
@@ -144,7 +137,6 @@ export class ProcessContainer {
         );
       }
 
-      // Setup cron restart
       if (this.config.cronRestart) {
         this.cronManager.schedule(this.id, this.config.cronRestart, () => {
           console.log(`[bm2] Cron restart triggered for ${this.name}`);
@@ -181,7 +173,7 @@ export class ProcessContainer {
     });
 
     this.pid = this.process.pid;
-    this.pipeOutput(logPaths);
+    this.logStreamPiper.pipeOutput(this.process, logPaths);
 
     this.process.exited.then((code) => {
       if (!this.isRestarting) {
@@ -202,10 +194,10 @@ export class ProcessContainer {
     this.pid = proc.pid;
 
     if (proc.stdout && typeof proc.stdout !== "number") {
-      this.pipeStream(proc.stdout, logPaths.outFile);
+      this.logStreamPiper.pipeStream(proc.stdout, logPaths.outFile);
     }
     if (proc.stderr && typeof proc.stderr !== "number") {
-      this.pipeStream(proc.stderr, logPaths.errFile);
+      this.logStreamPiper.pipeStream(proc.stderr, logPaths.errFile);
     }
 
     proc.exited.then((code) => {
@@ -215,103 +207,18 @@ export class ProcessContainer {
     });
   }
 
-  private pipeOutput(logPaths: { outFile: string; errFile: string }) {
-    if (!this.process) return;
-    if (this.process.stdout && typeof this.process.stdout !== "number") {
-      this.pipeStream(this.process.stdout, logPaths.outFile);
-    }
-    if (this.process.stderr && typeof this.process.stderr !== "number") {
-      this.pipeStream(this.process.stderr, logPaths.errFile);
-    }
-  }
-
-  private async pipeStream(stream: ReadableStream<Uint8Array>, filePath: string) {
-    const reader = stream.getReader();
-    const decoder = new TextDecoder();
-
-    // Holds the tail of the last chunk if it did not end on a newline.
-    // Without this, a chunk boundary mid-word (e.g. "hel" / "lo\n") would be
-    // written as two separate log lines, corrupting the output.
-    let remainder = "";
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-
-        if (done) {
-          // Flush any buffered content that was never terminated with \n
-          if (remainder.length > 0) {
-            const timestamp = new Date().toISOString();
-            await this.logManager.appendLog(filePath, `[${timestamp}] ${remainder}\n`);
-            remainder = "";
-          }
-          break;
-        }
-
-        // stream=true tells the decoder to hold multi-byte UTF-8 sequences
-        // that straddle chunk boundaries rather than emitting replacement chars.
-        const chunk = decoder.decode(value, { stream: true });
-
-        // Prepend any leftover from the previous chunk before splitting.
-        // This is a single string allocation per chunk (not per line), so
-        // allocation pressure stays O(chunk size) rather than O(line count).
-        const text = remainder + chunk;
-        const lines = text.split("\n");
-
-        // The last element is either "" (chunk ended on \n) or an incomplete
-        // line. Either way, hold it back for the next iteration.
-        remainder = lines.pop()!;
-
-        if (lines.length === 0) continue;
-
-        const timestamp = new Date().toISOString();
-        // Build a single string for all complete lines in this chunk so
-        // appendLog (and the underlying O_APPEND write) is called once per
-        // chunk, not once per line.
-        const output = lines.map((line) => `[${timestamp}] ${line}\n`).join("");
-        await this.logManager.appendLog(filePath, output);
-      }
-    } catch (err) {
-      // Flush remainder on unexpected stream error, then propagate
-      if (remainder.length > 0) {
-        const timestamp = new Date().toISOString();
-        await this.logManager.appendLog(filePath, `[${timestamp}] ${remainder}\n`);
-      }
-      console.error("[bm2] Stream flush error:", err);
-    }
-  }
-
-  
   private startMonitoring() {
-      this.monitorInterval = setInterval(async () => {
-        
-        if (!this.pid || this.status !== "online") return;
-  
-        try {
-          
-          // 1. Fetch cross-platform CPU and Memory usage
-          const stats = await pidusage(this.pid);
-          
-          // pidusage returns memory directly in bytes and cpu as a percentage
-          this.memory = stats.memory; 
-          this.cpu = stats.cpu;
-  
-          // 2. Track file descriptors (handles) on Linux
-          // (pidusage does not provide this metric, so we keep the original logic)
-          if (process.platform === "linux") {
-            try {
-              this.handles = (await readdir(`/proc/${this.pid}/fd`)).length;
-            } catch {}
-          }
-  
-          // 3. Max memory restart
-          if (this.config.maxMemoryRestart && this.memory > this.config.maxMemoryRestart) {
-            console.log(`[bm2] ${this.name} exceeded memory limit (${this.memory} > ${this.config.maxMemoryRestart}), restarting...`);
-            await this.restart();
-          }
-          
-        } catch {}
-      }, MONITOR_INTERVAL);
+    if (!this.pid) return;
+    this.resourceMonitor.start(
+      this.pid,
+      this.config.maxMemoryRestart,
+      (memory, cpu, handles) => {
+        this.memory = memory;
+        this.cpu = cpu;
+        this.handles = handles;
+      },
+      () => this.restart()
+    );
   }
 
   private startLogRotation(logPaths: { outFile: string; errFile: string }) {
@@ -391,10 +298,7 @@ export class ProcessContainer {
   }
 
   private cleanupTimers() {
-    if (this.monitorInterval) {
-      clearInterval(this.monitorInterval);
-      this.monitorInterval = null;
-    }
+    this.resourceMonitor.stop();
     if (this.logRotateInterval) {
       clearInterval(this.logRotateInterval);
       this.logRotateInterval = null;
@@ -456,7 +360,6 @@ export class ProcessContainer {
       }
     }
 
-    // Clean up cluster workers
     this.clusterManager.removeAllWorkers(this.id);
 
     this.status = "stopped";
@@ -485,10 +388,8 @@ export class ProcessContainer {
 
     await this.start();
 
-    // Wait for new process to be stable
     await new Promise((resolve) => setTimeout(resolve, 2000));
 
-    // Kill old process
     if (oldProcess && oldPid) {
       try {
         if (this.config.treekill !== false) {
