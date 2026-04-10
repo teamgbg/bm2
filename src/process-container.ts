@@ -271,12 +271,13 @@ export class ProcessContainer {
         const output = lines.map((line) => `[${timestamp}] ${line}\n`).join("");
         await this.logManager.appendLog(filePath, output);
       }
-    } catch {
-      // Flush remainder on unexpected stream error
+    } catch (err) {
+      // Flush remainder on unexpected stream error, then propagate
       if (remainder.length > 0) {
         const timestamp = new Date().toISOString();
-        await this.logManager.appendLog(filePath, `[${timestamp}] ${remainder}\n`).catch(() => {});
+        await this.logManager.appendLog(filePath, `[${timestamp}] ${remainder}\n`);
       }
+      console.error("[bm2] Stream flush error:", err);
     }
   }
 

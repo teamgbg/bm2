@@ -164,8 +164,12 @@ export class LogManager {
         const src = i === 1 ? filePath : `${filePath}.${i - 1}`;
         const dst = `${filePath}.${i}`;
 
-        const srcExists = await access(src).then(() => true).catch(() => false);
-        if (!srcExists) continue;
+        try {
+          await access(src);
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+          throw err;
+        }
 
         await rename(src, dst);
 
@@ -199,9 +203,11 @@ export class LogManager {
           .sort()
           .reverse();
         await Promise.all(
-          rotated.slice(options.retain).map((f) => unlink(join(dir, f)).catch(() => {}))
+          rotated.slice(options.retain).map((f) => unlink(join(dir, f)))
         );
-      } catch {}
+      } catch (err) {
+        console.error(`[bm2] Log rotation cleanup failed for ${filePath}:`, err);
+      }
 
       // Truncate original to reclaim inode while keeping it open for writers
       await Bun.write(filePath, "");
