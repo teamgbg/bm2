@@ -86,7 +86,8 @@ async function handleMessage(msg: DaemonMessage): Promise<DaemonResponse> {
   try {
     switch (msg.type) {
       case "start": {
-        const states = await pm.start(msg.data);
+        const { config, cwd } = msg.data as { config: any; cwd?: string };
+        const states = await pm.start({ ...config, cwd: cwd || config.cwd });
         return { type: "start", data: states, success: true, id: msg.id };
       }
       case "stop": {

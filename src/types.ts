@@ -81,6 +81,8 @@ export interface ProcessDescription {
   // Version tracking
   version?: string;
   versioningConfig?: VersioningConfig;
+  // Protection
+  protected?: boolean;
 }
 
 export interface VersioningConfig {
@@ -151,6 +153,7 @@ export interface StartOptions {
   namespace?: string;
   nodeArgs?: string[];
   sourceMapSupport?: boolean;
+  protected?: boolean;
 }
 
 export interface EcosystemConfig {

@@ -31,21 +31,25 @@ export class ClusterManager {
      return instances;
    }
  
-   createWorkerEnv(
-     baseEnv: Record<string, string>,
-     workerId: number,
-     totalWorkers: number,
-     basePort?: number
-   ): Record<string, string> {
-     return {
-       ...baseEnv,
-       BM2_CLUSTER: "true",
-       BM2_WORKER_ID: String(workerId),
-       BM2_INSTANCES: String(totalWorkers),
-       NODE_APP_INSTANCE: String(workerId),
-       ...(basePort ? { PORT: String(basePort + workerId) } : {}),
-     };
-   }
+    createWorkerEnv(
+      baseEnv: Record<string, string>,
+      workerId: number,
+      totalWorkers: number,
+      basePort?: number,
+      isProtected?: boolean,
+      daemonPid?: string
+    ): Record<string, string> {
+      return {
+        ...baseEnv,
+        BM2_CLUSTER: "true",
+        BM2_WORKER_ID: String(workerId),
+        BM2_INSTANCES: String(totalWorkers),
+        NODE_APP_INSTANCE: String(workerId),
+        ...(basePort ? { PORT: String(basePort + workerId) } : {}),
+        ...(daemonPid ? { BM2_DAEMON_PID: daemonPid } : {}),
+        ...(isProtected ? { BM2_PROTECTED: "1" } : {}),
+      };
+    }
  
    buildWorkerCommand(config: ProcessDescription): string[] {
      const cmd: string[] = [];
@@ -75,18 +79,28 @@ export class ClusterManager {
    }
  
    spawnWorker(
-     config: ProcessDescription,
-     workerId: number,
-     totalWorkers: number,
-     logStreams: { stdout: "pipe" | "inherit"; stderr: "pipe" | "inherit" }
-   ): Subprocess {
-     const cmd = this.buildWorkerCommand(config);
-     const env = this.createWorkerEnv(
-       { ...process.env as Record<string, string>, ...config.env },
-       workerId,
-       totalWorkers,
-       config.port
-     );
+      config: ProcessDescription,
+      workerId: number,
+      totalWorkers: number,
+      logStreams: { stdout: "pipe" | "inherit"; stderr: "pipe" | "inherit" },
+      isProtected?: boolean,
+      daemonPid?: string
+    ): Subprocess {
+      let cmd = this.buildWorkerCommand(config);
+      
+      if (isProtected && daemonPid) {
+        const wrapperPath = import.meta.dir + "/../bin/bm2-signal-protect";
+        cmd = [wrapperPath, daemonPid, ...cmd];
+      }
+      
+      const env = this.createWorkerEnv(
+        { ...process.env as Record<string, string>, ...config.env },
+        workerId,
+        totalWorkers,
+        config.port,
+        isProtected,
+        daemonPid
+      );
  
      const proc = Bun.spawn(cmd, {
        cwd: config.cwd || process.cwd(),

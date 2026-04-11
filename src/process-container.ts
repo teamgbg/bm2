@@ -32,6 +32,7 @@ import {
   PID_DIR,
   DEFAULT_LOG_MAX_SIZE,
   DEFAULT_LOG_RETAIN,
+  DAEMON_PID_FILE,
 } from "./constants";
 
 export class ProcessContainer {
@@ -155,13 +156,22 @@ export class ProcessContainer {
   }
 
   private async startFork(logPaths: { outFile: string; errFile: string }) {
-    const cmd = this.clusterManager.buildWorkerCommand(this.config);
+    let cmd = this.clusterManager.buildWorkerCommand(this.config);
+    const daemonPid = await this.getDaemonPid();
+    
+    if (this.config.protected) {
+      const wrapperPath = import.meta.dir + "/../bin/bm2-signal-protect";
+      cmd = [wrapperPath, daemonPid, ...cmd];
+    }
+    
     const env: Record<string, string> = {
       ...(process.env as Record<string, string>),
       ...this.config.env,
       BM2_ID: String(this.id),
       BM2_NAME: this.name,
       BM2_EXEC_MODE: "fork",
+      BM2_DAEMON_PID: daemonPid,
+      ...(this.config.protected ? { BM2_PROTECTED: "1" } : {}),
     };
 
     this.process = Bun.spawn(cmd, {
@@ -183,11 +193,14 @@ export class ProcessContainer {
   }
 
   private async startCluster(logPaths: { outFile: string; errFile: string }) {
+    const daemonPid = await this.getDaemonPid();
     const proc = this.clusterManager.spawnWorker(
       this.config,
       0,
       this.config.instances,
-      { stdout: "pipe", stderr: "pipe" }
+      { stdout: "pipe", stderr: "pipe" },
+      this.config.protected,
+      daemonPid
     );
 
     this.process = proc;
@@ -443,5 +456,15 @@ export class ProcessContainer {
       config: this.config,
       restartCount: this.restartCount,
     };
+  }
+
+  private async getDaemonPid(): Promise<string> {
+    try {
+      const file = Bun.file(DAEMON_PID_FILE);
+      if (await file.exists()) {
+        return (await file.text()).trim();
+      }
+    } catch {}
+    return String(process.pid);
   }
 }
