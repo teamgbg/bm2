@@ -24,16 +24,17 @@ import { LogManager } from "./log-manager";
 import { ClusterManager } from "./cluster-manager";
 import { HealthChecker } from "./health-checker";
 import { CronManager } from "./cron-manager";
-import { ResourceMonitor } from "./resource-monitor";
-import { LogStreamPiper } from "./log-stream-piper";
 import { treeKill } from "./utils";
 import { join } from "path";
 import {
   PID_DIR,
+  MONITOR_INTERVAL,
   DEFAULT_LOG_MAX_SIZE,
   DEFAULT_LOG_RETAIN,
-  DAEMON_PID_FILE,
 } from "./constants";
+import pidusage from "pidusage";
+import { readdir } from "node:fs/promises";
+import { pluginRegistry } from "./plugins/registry";
 
 export class ProcessContainer {
   public id: number;
@@ -56,10 +57,9 @@ export class ProcessContainer {
   private clusterManager: ClusterManager;
   private healthChecker: HealthChecker;
   private cronManager: CronManager;
-  private resourceMonitor = new ResourceMonitor();
-  private logStreamPiper: LogStreamPiper;
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
   private watcher: ReturnType<typeof import("fs").watch> | null = null;
+  private monitorInterval: ReturnType<typeof setInterval> | null = null;
   private logRotateInterval: ReturnType<typeof setInterval> | null = null;
   private isRestarting: boolean = false;
 
@@ -78,7 +78,6 @@ export class ProcessContainer {
     this.clusterManager = clusterManager;
     this.healthChecker = healthChecker;
     this.cronManager = cronManager;
-    this.logStreamPiper = new LogStreamPiper((filePath, data) => this.logManager.appendLog(filePath, data));
     this.createdAt = Date.now();
   }
 
@@ -144,6 +143,12 @@ export class ProcessContainer {
           this.restart();
         });
       }
+
+      for (const hook of pluginRegistry.getProcessContainerHooks()) {
+        if (hook.onAfterStart) {
+          await hook.onAfterStart(this);
+        }
+      }
     } catch (err: any) {
       this.status = "errored";
       const timestamp = new Date().toISOString();
@@ -157,22 +162,23 @@ export class ProcessContainer {
 
   private async startFork(logPaths: { outFile: string; errFile: string }) {
     let cmd = this.clusterManager.buildWorkerCommand(this.config);
-    const daemonPid = await this.getDaemonPid();
-    
-    if (this.config.protected) {
-      const wrapperPath = import.meta.dir + "/../bin/bm2-signal-protect";
-      cmd = [wrapperPath, daemonPid, ...cmd];
-    }
-    
     const env: Record<string, string> = {
       ...(process.env as Record<string, string>),
       ...this.config.env,
       BM2_ID: String(this.id),
       BM2_NAME: this.name,
       BM2_EXEC_MODE: "fork",
-      BM2_DAEMON_PID: daemonPid,
-      ...(this.config.protected ? { BM2_PROTECTED: "1" } : {}),
     };
+
+    for (const hook of pluginRegistry.getProcessContainerHooks()) {
+      if (hook.onBeforeSpawn) {
+        const result = hook.onBeforeSpawn(this.config, cmd, env);
+        if (result) {
+          if (result.cmd) cmd = result.cmd;
+          if (result.env) Object.assign(env, result.env);
+        }
+      }
+    }
 
     this.process = Bun.spawn(cmd, {
       cwd: this.config.cwd || process.cwd(),
@@ -183,7 +189,7 @@ export class ProcessContainer {
     });
 
     this.pid = this.process.pid;
-    this.logStreamPiper.pipeOutput(this.process, logPaths);
+    this.pipeOutput(logPaths);
 
     this.process.exited.then((code) => {
       if (!this.isRestarting) {
@@ -193,24 +199,36 @@ export class ProcessContainer {
   }
 
   private async startCluster(logPaths: { outFile: string; errFile: string }) {
-    const daemonPid = await this.getDaemonPid();
-    const proc = this.clusterManager.spawnWorker(
+    let cmd = this.clusterManager.buildWorkerCommand(this.config);
+    const baseEnv = { ...process.env as Record<string, string>, ...this.config.env };
+    const env = baseEnv;
+
+    for (const hook of pluginRegistry.getProcessContainerHooks()) {
+      if (hook.onBeforeSpawn) {
+        const result = hook.onBeforeSpawn(this.config, cmd, env);
+        if (result) {
+          if (result.cmd) cmd = result.cmd;
+          if (result.env) Object.assign(env, result.env);
+        }
+      }
+    }
+
+    const proc = this.clusterManager.spawnWorkerWithEnv(
       this.config,
       0,
       this.config.instances,
       { stdout: "pipe", stderr: "pipe" },
-      this.config.protected,
-      daemonPid
+      env
     );
 
     this.process = proc;
     this.pid = proc.pid;
 
     if (proc.stdout && typeof proc.stdout !== "number") {
-      this.logStreamPiper.pipeStream(proc.stdout, logPaths.outFile);
+      this.pipeStream(proc.stdout, logPaths.outFile);
     }
     if (proc.stderr && typeof proc.stderr !== "number") {
-      this.logStreamPiper.pipeStream(proc.stderr, logPaths.errFile);
+      this.pipeStream(proc.stderr, logPaths.errFile);
     }
 
     proc.exited.then((code) => {
@@ -220,18 +238,90 @@ export class ProcessContainer {
     });
   }
 
+  private pipeOutput(logPaths: { outFile: string; errFile: string }) {
+    if (!this.process) return;
+    if (this.process.stdout && typeof this.process.stdout !== "number") {
+      this.pipeStream(this.process.stdout, logPaths.outFile);
+    }
+    if (this.process.stderr && typeof this.process.stderr !== "number") {
+      this.pipeStream(this.process.stderr, logPaths.errFile);
+    }
+  }
+
+  private async pipeStream(stream: ReadableStream<Uint8Array>, filePath: string) {
+    let customHandler = false;
+    for (const hook of pluginRegistry.getProcessContainerHooks()) {
+      if (hook.onPipeOutput) {
+        customHandler = true;
+        hook.onPipeOutput(stream, filePath, this);
+      }
+    }
+
+    if (customHandler) return;
+
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let remainder = "";
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+
+        if (done) {
+          if (remainder.length > 0) {
+            const timestamp = new Date().toISOString();
+            await this.logManager.appendLog(filePath, `[${timestamp}] ${remainder}\n`);
+            remainder = "";
+          }
+          break;
+        }
+
+        const chunk = decoder.decode(value, { stream: true });
+        const text = remainder + chunk;
+        const lines = text.split("\n");
+        remainder = lines.pop()!;
+
+        if (lines.length === 0) continue;
+
+        const timestamp = new Date().toISOString();
+        const output = lines.map((line) => `[${timestamp}] ${line}\n`).join("");
+        await this.logManager.appendLog(filePath, output);
+      }
+    } catch {
+      if (remainder.length > 0) {
+        const timestamp = new Date().toISOString();
+        await this.logManager.appendLog(filePath, `[${timestamp}] ${remainder}\n`).catch(() => {});
+      }
+    }
+  }
+
   private startMonitoring() {
-    if (!this.pid) return;
-    this.resourceMonitor.start(
-      this.pid,
-      this.config.maxMemoryRestart,
-      (memory, cpu, handles) => {
-        this.memory = memory;
-        this.cpu = cpu;
-        this.handles = handles;
-      },
-      () => this.restart()
-    );
+    this.monitorInterval = setInterval(async () => {
+      if (!this.pid || this.status !== "online") return;
+
+      try {
+        const stats = await pidusage(this.pid);
+        this.memory = stats.memory;
+        this.cpu = stats.cpu;
+
+        if (process.platform === "linux") {
+          try {
+            this.handles = (await readdir(`/proc/${this.pid}/fd`)).length;
+          } catch {}
+        }
+
+        for (const hook of pluginRegistry.getProcessContainerHooks()) {
+          if (hook.onMetrics) {
+            hook.onMetrics({ memory: this.memory, cpu: this.cpu, handles: this.handles }, this);
+          }
+        }
+
+        if (this.config.maxMemoryRestart && this.memory > this.config.maxMemoryRestart) {
+          console.log(`[bm2] ${this.name} exceeded memory limit (${this.memory} > ${this.config.maxMemoryRestart}), restarting...`);
+          await this.restart();
+        }
+      } catch {}
+    }, MONITOR_INTERVAL);
   }
 
   private startLogRotation(logPaths: { outFile: string; errFile: string }) {
@@ -311,7 +401,10 @@ export class ProcessContainer {
   }
 
   private cleanupTimers() {
-    this.resourceMonitor.stop();
+    if (this.monitorInterval) {
+      clearInterval(this.monitorInterval);
+      this.monitorInterval = null;
+    }
     if (this.logRotateInterval) {
       clearInterval(this.logRotateInterval);
       this.logRotateInterval = null;
@@ -380,6 +473,12 @@ export class ProcessContainer {
     this.process = null;
     this.memory = 0;
     this.cpu = 0;
+
+    for (const hook of pluginRegistry.getProcessManagerHooks()) {
+      if (hook.onAfterStop) {
+        await hook.onAfterStop(this);
+      }
+    }
   }
 
   async restart(): Promise<void> {
@@ -456,15 +555,5 @@ export class ProcessContainer {
       config: this.config,
       restartCount: this.restartCount,
     };
-  }
-
-  private async getDaemonPid(): Promise<string> {
-    try {
-      const file = Bun.file(DAEMON_PID_FILE);
-      if (await file.exists()) {
-        return (await file.text()).trim();
-      }
-    } catch {}
-    return String(process.pid);
   }
 }

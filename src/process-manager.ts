@@ -39,6 +39,7 @@ import {
   DEFAULT_LOG_RETAIN,
 } from "./constants";
 import path from "path";
+import { pluginRegistry } from "./plugins/registry";
 
 export class ProcessManager {
   public logManager: LogManager;
@@ -187,6 +188,7 @@ export class ProcessManager {
       nodeArgs: options.nodeArgs,
       sourceMapSupport: options.sourceMapSupport,
       treekill: true,
+      protected: options.protected,
     };
   }
 
@@ -255,7 +257,7 @@ export class ProcessManager {
     const states: ProcessState[] = [];
     for (const c of this.registry.values()) {
       await c.stop(true);
-      await Bun.sleep(100)
+      await Bun.sleep(100);
       states.push(c.getState());
     }
     this.registry.clear();

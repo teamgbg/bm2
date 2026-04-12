@@ -16,117 +16,142 @@
 import type { Subprocess } from "bun";
 import type { ProcessDescription } from "./types";
 import { getCpuCount } from "./utils";
-import path from "path"
- 
+import path from "path";
+
 export class ClusterManager {
-   private workers: Map<number, Map<number, Subprocess>> = new Map();
- 
-   resolveInstances(instances: number | string | undefined): number {
-     if (instances === undefined || instances === 0) return 1;
-     if (typeof instances === "string") {
-       if (instances === "max" || instances === "-1") return getCpuCount();
-       return parseInt(instances) || 1;
-     }
-     if (instances === -1) return getCpuCount();
-     return instances;
-   }
- 
-    createWorkerEnv(
-      baseEnv: Record<string, string>,
-      workerId: number,
-      totalWorkers: number,
-      basePort?: number,
-      isProtected?: boolean,
-      daemonPid?: string
-    ): Record<string, string> {
-      return {
-        ...baseEnv,
-        BM2_CLUSTER: "true",
-        BM2_WORKER_ID: String(workerId),
-        BM2_INSTANCES: String(totalWorkers),
-        NODE_APP_INSTANCE: String(workerId),
-        ...(basePort ? { PORT: String(basePort + workerId) } : {}),
-        ...(daemonPid ? { BM2_DAEMON_PID: daemonPid } : {}),
-        ...(isProtected ? { BM2_PROTECTED: "1" } : {}),
-      };
+  private workers: Map<number, Map<number, Subprocess>> = new Map();
+
+  resolveInstances(instances: number | string | undefined): number {
+    if (instances === undefined || instances === 0) return 1;
+    if (typeof instances === "string") {
+      if (instances === "max" || instances === "-1") return getCpuCount();
+      return parseInt(instances) || 1;
     }
- 
-   buildWorkerCommand(config: ProcessDescription): string[] {
-     const cmd: string[] = [];
- 
-     if (config.interpreter) {
-       cmd.push(config.interpreter);
-       if (config.interpreterArgs) cmd.push(...config.interpreterArgs);
-     } else {
-       const ext = config.script.split(".").pop()?.toLowerCase();
-       if (ext === "ts" || ext === "tsx" || ext === "js" || ext === "jsx" || ext === "mjs") {
-         cmd.push("bun", "run");
-       } else if (ext === "py") {
-         cmd.push("python3");
-       } else {
-         cmd.push("bun", "run");
-       }
-     }
- 
-     if (config.nodeArgs?.length) {
-       cmd.push(...config.nodeArgs);
-     }
- 
-     cmd.push(path.resolve(config.script));
-     if (config.args?.length) cmd.push(...config.args);
- 
-     return cmd;
-   }
- 
-   spawnWorker(
-      config: ProcessDescription,
-      workerId: number,
-      totalWorkers: number,
-      logStreams: { stdout: "pipe" | "inherit"; stderr: "pipe" | "inherit" },
-      isProtected?: boolean,
-      daemonPid?: string
-    ): Subprocess {
-      let cmd = this.buildWorkerCommand(config);
-      
-      if (isProtected && daemonPid) {
-        const wrapperPath = import.meta.dir + "/../bin/bm2-signal-protect";
-        cmd = [wrapperPath, daemonPid, ...cmd];
+    if (instances === -1) return getCpuCount();
+    return instances;
+  }
+
+  createWorkerEnv(
+    baseEnv: Record<string, string>,
+    workerId: number,
+    totalWorkers: number,
+    basePort?: number,
+    isProtected?: boolean,
+    daemonPid?: string
+  ): Record<string, string> {
+    return {
+      ...baseEnv,
+      BM2_CLUSTER: "true",
+      BM2_WORKER_ID: String(workerId),
+      BM2_INSTANCES: String(totalWorkers),
+      NODE_APP_INSTANCE: String(workerId),
+      ...(basePort ? { PORT: String(basePort + workerId) } : {}),
+      ...(daemonPid ? { BM2_DAEMON_PID: daemonPid } : {}),
+      ...(isProtected ? { BM2_PROTECTED: "1" } : {}),
+    };
+  }
+
+  buildWorkerCommand(config: ProcessDescription): string[] {
+    const cmd: string[] = [];
+
+    if (config.interpreter) {
+      cmd.push(config.interpreter);
+      if (config.interpreterArgs) cmd.push(...config.interpreterArgs);
+    } else {
+      const ext = config.script.split(".").pop()?.toLowerCase();
+      if (ext === "ts" || ext === "tsx" || ext === "js" || ext === "jsx" || ext === "mjs") {
+        cmd.push("bun", "run");
+      } else if (ext === "py") {
+        cmd.push("python3");
+      } else {
+        cmd.push("bun", "run");
       }
-      
-      const env = this.createWorkerEnv(
-        { ...process.env as Record<string, string>, ...config.env },
-        workerId,
-        totalWorkers,
-        config.port,
-        isProtected,
-        daemonPid
-      );
- 
-     const proc = Bun.spawn(cmd, {
-       cwd: config.cwd || process.cwd(),
-       env,
-       stdout: logStreams.stdout,
-       stderr: logStreams.stderr,
-       stdin: "ignore",
-     });
- 
-     if (!this.workers.has(config.id)) {
-       this.workers.set(config.id, new Map());
-     }
-     this.workers.get(config.id)!.set(workerId, proc);
- 
-     return proc;
-   }
- 
-   getWorkers(processId: number): Map<number, Subprocess> | undefined {
-     return this.workers.get(processId);
-   }
- 
-   removeWorker(processId: number, workerId: number) {
-     this.workers.get(processId)?.delete(workerId);
-   }
- 
-   removeAllWorkers(processId: number) {
-     this.workers.delete(processId);
-   }
- }
+    }
+
+    if (config.nodeArgs?.length) {
+      cmd.push(...config.nodeArgs);
+    }
+
+    cmd.push(path.resolve(config.script));
+    if (config.args?.length) cmd.push(...config.args);
+
+    return cmd;
+  }
+
+  spawnWorker(
+    config: ProcessDescription,
+    workerId: number,
+    totalWorkers: number,
+    logStreams: { stdout: "pipe" | "inherit"; stderr: "pipe" | "inherit" },
+    isProtected?: boolean,
+    daemonPid?: string
+  ): Subprocess {
+    let cmd = this.buildWorkerCommand(config);
+
+    if (isProtected && daemonPid) {
+      const wrapperPath = import.meta.dir + "/../bin/bm2-signal-protect";
+      cmd = [wrapperPath, daemonPid, ...cmd];
+    }
+
+    const env = this.createWorkerEnv(
+      { ...process.env as Record<string, string>, ...config.env },
+      workerId,
+      totalWorkers,
+      config.port,
+      isProtected,
+      daemonPid
+    );
+
+    const proc = Bun.spawn(cmd, {
+      cwd: config.cwd || process.cwd(),
+      env,
+      stdout: logStreams.stdout,
+      stderr: logStreams.stderr,
+      stdin: "ignore",
+    });
+
+    if (!this.workers.has(config.id)) {
+      this.workers.set(config.id, new Map());
+    }
+    this.workers.get(config.id)!.set(workerId, proc);
+
+    return proc;
+  }
+
+  spawnWorkerWithEnv(
+    config: ProcessDescription,
+    workerId: number,
+    totalWorkers: number,
+    logStreams: { stdout: "pipe" | "inherit"; stderr: "pipe" | "inherit" },
+    env: Record<string, string>
+  ): Subprocess {
+    const cmd = this.buildWorkerCommand(config);
+
+    const proc = Bun.spawn(cmd, {
+      cwd: config.cwd || process.cwd(),
+      env,
+      stdout: logStreams.stdout,
+      stderr: logStreams.stderr,
+      stdin: "ignore",
+    });
+
+    if (!this.workers.has(config.id)) {
+      this.workers.set(config.id, new Map());
+    }
+    this.workers.get(config.id)!.set(workerId, proc);
+
+    return proc;
+  }
+
+  getWorkers(processId: number): Map<number, Subprocess> | undefined {
+    return this.workers.get(processId);
+  }
+
+  removeWorker(processId: number, workerId: number) {
+    this.workers.get(processId)?.delete(workerId);
+  }
+
+  removeAllWorkers(processId: number) {
+    this.workers.delete(processId);
+  }
+}

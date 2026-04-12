@@ -13,7 +13,7 @@
  * License: GPL-3.0-only
  * Author: Zak <zak@maxxpainn.com>
  */
- 
+
 import { ProcessManager } from "./process-manager";
 import { Dashboard } from "./dashboard";
 import { ModuleManager } from "./module-manager";
@@ -24,212 +24,247 @@ import {
   METRICS_PORT,
 } from "./constants";
 import { ensureDirs } from "./utils";
-import { unlinkSync, existsSync } from "fs";
 import type { DaemonMessage, DaemonResponse } from "./types";
-import type { BunRequest, Server } from "bun";
+import type { Server } from "bun";
 
-ensureDirs();
+export default class Daemon {
+  initialized: boolean = false;
+  server: Server<any> | null = null;
+  pm: ProcessManager | null = null;
+  dashboard: Dashboard | null = null;
+  moduleManager: ModuleManager | null = null;
+  metricsInterval: NodeJS.Timeout | null = null;
+  args = process.argv.slice(2);
+  debugMode: boolean = false;
+  daemonEnabled: boolean = true;
 
-let server: Server<any> | null = null
-const pm = new ProcessManager();
-const dashboard = new Dashboard(pm);
-const moduleManager = new ModuleManager(pm);
+  private boundFetch = (req: Request) => this.handleServerRequests(req);
 
-// Clean up existing socket
-if (existsSync(DAEMON_SOCKET)) {
-  try { unlinkSync(DAEMON_SOCKET); } catch {}
-}
+  getServerOpts = () => ({
+    unix: DAEMON_SOCKET,
+    fetch: this.boundFetch,
+  });
 
-// Write PID file
-await Bun.write(DAEMON_PID_FILE, String(process.pid));
+  async initialize(_daemonEnabled: boolean = true) {
+    await ensureDirs();
 
-// Load modules
-await moduleManager.loadAll();
+    this.daemonEnabled = _daemonEnabled;
+    this.pm = new ProcessManager();
+    this.dashboard = new Dashboard(this.pm);
+    this.moduleManager = new ModuleManager(this.pm);
 
-// Start metric collection
-const metricsInterval = setInterval(() => {
-  pm.getMetrics();
-}, 2000);
+    this.args = process.argv.slice(2);
+    this.debugMode = this.args.includes("--debug");
 
+    if (_daemonEnabled) {
+      const sock = Bun.file(DAEMON_SOCKET);
+      if (await sock.exists()) {
+        try { await sock.delete(); } catch {}
+      }
 
-const handleServerRequests = async (req: Request) => {
-             
-  if (req.method !== "POST") {
-    return Response.json(
-      { type: "error", error: "Method Not Allowed", success: false },
-      { status: 405 }
-    )
-  }
-
-  try {
-        
-    const msg: DaemonMessage = await req.json() as DaemonMessage;
-                                
-    const response = await handleMessage(msg);
-        
-    return Response.json(response);
-        
-  } catch (err: any) {
-    return Response.json(
-      { type: "error", error: err.message, success: false },
-      { status: 500 }
-    );
-  }
-};
-
-const serverOptions = {
-  unix: DAEMON_SOCKET,
-  fetch: handleServerRequests
-}
-
-async function handleMessage(msg: DaemonMessage): Promise<DaemonResponse> {
-  try {
-    switch (msg.type) {
-      case "start": {
-        const { config, cwd } = msg.data as { config: any; cwd?: string };
-        const states = await pm.start({ ...config, cwd: cwd || config.cwd });
-        return { type: "start", data: states, success: true, id: msg.id };
-      }
-      case "stop": {
-        const states = await pm.stop(msg.data.target);
-        return { type: "stop", data: states, success: true, id: msg.id };
-      }
-      case "restart": {
-        const states = await pm.restart(msg.data.target);
-        return { type: "restart", data: states, success: true, id: msg.id };
-      }
-      case "reload": {
-        const states = await pm.reload(msg.data.target);
-        return { type: "reload", data: states, success: true, id: msg.id };
-      }
-      case "delete": {
-        const states = await pm.del(msg.data.target);
-        return { type: "delete", data: states, success: true, id: msg.id };
-      }
-      case "scale": {
-        const states = await pm.scale(msg.data.target, msg.data.count);
-        return { type: "scale", data: states, success: true, id: msg.id };
-      }
-      case "stopAll": {
-        const states = await pm.stopAll();
-        return { type: "stopAll", data: states, success: true, id: msg.id };
-      }
-      case "restartAll": {
-        const states = await pm.restartAll();
-        return { type: "restartAll", data: states, success: true, id: msg.id };
-      }
-      case "reloadAll": {
-        const states = await pm.reloadAll();
-        return { type: "reloadAll", data: states, success: true, id: msg.id };
-      }
-      case "deleteAll": {
-        const states = await pm.deleteAll();
-        return { type: "deleteAll", data: states, success: true, id: msg.id };
-      }
-      case "list": {
-        return { type: "list", data: pm.list(), success: true, id: msg.id };
-      }
-      case "describe": {
-        return { type: "describe", data: pm.describe(msg.data.target), success: true, id: msg.id };
-      }
-      case "logs": {
-        const logs = await pm.getLogs(msg.data.target, msg.data.lines);
-        return { type: "logs", data: logs, success: true, id: msg.id };
-      }
-      case "flush": {
-        await pm.flushLogs(msg.data?.target);
-        return { type: "flush", success: true, id: msg.id };
-      }
-      case "save": {
-        await pm.save();
-        return { type: "save", success: true, id: msg.id };
-      }
-      case "resurrect": {
-        const states = await pm.resurrect();
-        return { type: "resurrect", data: states, success: true, id: msg.id };
-      }
-      case "ecosystem": {
-        const states = await pm.startEcosystem(msg.data);
-        return { type: "ecosystem", data: states, success: true, id: msg.id };
-      }
-      case "signal": {
-        await pm.sendSignal(msg.data.target, msg.data.signal);
-        return { type: "signal", success: true, id: msg.id };
-      }
-      case "reset": {
-        const states = await pm.reset(msg.data.target);
-        return { type: "reset", data: states, success: true, id: msg.id };
-      }
-      case "metrics": {
-        const metrics = await pm.getMetrics();
-        return { type: "metrics", data: metrics, success: true, id: msg.id };
-      }
-      case "metricsHistory": {
-        const history = pm.getMetricsHistory(msg.data?.seconds || 300);
-        return { type: "metricsHistory", data: history, success: true, id: msg.id };
-      }
-      case "prometheus": {
-        const prom = pm.getPrometheusMetrics();
-        return { type: "prometheus", data: prom, success: true, id: msg.id };
-      }
-      case "dashboard": {
-        const port = msg.data?.port || DASHBOARD_PORT;
-        const metricsPort = msg.data?.metricsPort || METRICS_PORT;
-        dashboard.start(port, metricsPort);
-        return { type: "dashboard", data: { port, metricsPort }, success: true, id: msg.id };
-      }
-      case "dashboardStop": {
-        dashboard.stop();
-        return { type: "dashboardStop", success: true, id: msg.id };
-      }
-      case "moduleInstall": {
-        const path = await moduleManager.install(msg.data.module);
-        return { type: "moduleInstall", data: { path }, success: true, id: msg.id };
-      }
-      case "moduleUninstall": {
-        await moduleManager.uninstall(msg.data.module);
-        return { type: "moduleUninstall", success: true, id: msg.id };
-      }
-        
-      case "moduleList": {
-        return { type: "moduleList", data: moduleManager.list(), success: true, id: msg.id };
-      }
-        
-      case "daemonReload": {
-        if (!server) {
-          server = Bun.serve(serverOptions);
-        } else {
-          server.reload(serverOptions)
-        }
-        
-        return { type: "daemonReload", data: `Daemon reloaded`, success: true, id: msg.id };
-      }
-      
-      case "ping": {
-        return {
-          type: "pong",
-          data: { pid: process.pid, uptime: process.uptime() },
-          success: true,
-          id: msg.id,
-        };
-      }
-        
-      case "kill": {
-        await pm.stopAll();
-        dashboard.stop();
-        clearInterval(metricsInterval);
-        setTimeout(() => process.exit(0), 200);
-        return { type: "kill", success: true, id: msg.id };
-      }
-      default:
-        return { type: "error", error: `Unknown command: ${msg.type}`, success: false, id: msg.id };
+      await Bun.write(DAEMON_PID_FILE, String(process.pid));
     }
-  } catch (err: any) {
-    return { type: "error", error: err.message, success: false, id: msg.id };
+
+    await this.moduleManager.loadAll();
+
+    this.metricsInterval = setInterval(() => {
+      this.pm!.getMetrics();
+    }, 2000);
+
+    this.initialized = true;
+  }
+
+  async handleServerRequests(req: Request): Promise<Response> {
+    if (req.method !== "POST") {
+      return Response.json(
+        { type: "error", error: "Method Not Allowed", success: false },
+        { status: 405 }
+      );
+    }
+
+    try {
+      const msg = (await req.json()) as DaemonMessage;
+      const response = await this.handleMessage(msg);
+      return Response.json(response);
+    } catch (err: any) {
+      return Response.json(
+        { type: "error", error: err.message, success: false },
+        { status: 500 }
+      );
+    }
+  }
+
+  startServer(): Server<any> {
+    if (!this.initialized) {
+      throw new Error("Daemon.initialize() must be called before startServer()");
+    }
+
+    this.server = Bun.serve(this.getServerOpts());
+    return this.server;
+  }
+
+  async handleMessage(msg: DaemonMessage): Promise<DaemonResponse> {
+    try {
+      if (!this.initialized) {
+        await this.initialize();
+      }
+
+      const pm = this.pm!;
+      const dashboard = this.dashboard!;
+      const moduleManager = this.moduleManager!;
+      const metricsInterval = this.metricsInterval!;
+
+      switch (msg.type) {
+        case "start": {
+          const { config, cwd } = msg.data as { config: any; cwd?: string };
+          const states = await pm.start({ ...config, cwd: cwd || config.cwd });
+          return { type: "start", data: states, success: true, id: msg.id };
+        }
+        case "stop": {
+          const states = await pm.stop(msg.data.target);
+          return { type: "stop", data: states, success: true, id: msg.id };
+        }
+        case "restart": {
+          const states = await pm.restart(msg.data.target);
+          return { type: "restart", data: states, success: true, id: msg.id };
+        }
+        case "reload": {
+          const states = await pm.reload(msg.data.target);
+          return { type: "reload", data: states, success: true, id: msg.id };
+        }
+        case "delete": {
+          const states = await pm.del(msg.data.target);
+          return { type: "delete", data: states, success: true, id: msg.id };
+        }
+        case "scale": {
+          const states = await pm.scale(msg.data.target, msg.data.count);
+          return { type: "scale", data: states, success: true, id: msg.id };
+        }
+        case "stopAll": {
+          const states = await pm.stopAll();
+          return { type: "stopAll", data: states, success: true, id: msg.id };
+        }
+        case "restartAll": {
+          const states = await pm.restartAll();
+          return { type: "restartAll", data: states, success: true, id: msg.id };
+        }
+        case "reloadAll": {
+          const states = await pm.reloadAll();
+          return { type: "reloadAll", data: states, success: true, id: msg.id };
+        }
+        case "deleteAll": {
+          const states = await pm.deleteAll();
+          return { type: "deleteAll", data: states, success: true, id: msg.id };
+        }
+        case "list": {
+          return { type: "list", data: pm.list(), success: true, id: msg.id };
+        }
+        case "describe": {
+          return { type: "describe", data: pm.describe(msg.data.target), success: true, id: msg.id };
+        }
+        case "logs": {
+          const logs = await pm.getLogs(msg.data.target, msg.data.lines);
+          return { type: "logs", data: logs, success: true, id: msg.id };
+        }
+        case "flush": {
+          await pm.flushLogs(msg.data?.target);
+          return { type: "flush", success: true, id: msg.id };
+        }
+        case "save": {
+          await pm.save();
+          return { type: "save", success: true, id: msg.id };
+        }
+        case "resurrect": {
+          const states = await pm.resurrect();
+          return { type: "resurrect", data: states, success: true, id: msg.id };
+        }
+        case "ecosystem": {
+          const states = await pm.startEcosystem(msg.data);
+          return { type: "ecosystem", data: states, success: true, id: msg.id };
+        }
+        case "signal": {
+          await pm.sendSignal(msg.data.target, msg.data.signal);
+          return { type: "signal", success: true, id: msg.id };
+        }
+        case "reset": {
+          const states = await pm.reset(msg.data.target);
+          return { type: "reset", data: states, success: true, id: msg.id };
+        }
+        case "metrics": {
+          const metrics = await pm.getMetrics();
+          return { type: "metrics", data: metrics, success: true, id: msg.id };
+        }
+        case "metricsHistory": {
+          const history = pm.getMetricsHistory(msg.data?.seconds || 300);
+          return { type: "metricsHistory", data: history, success: true, id: msg.id };
+        }
+        case "prometheus": {
+          const prom = pm.getPrometheusMetrics();
+          return { type: "prometheus", data: prom, success: true, id: msg.id };
+        }
+        case "dashboard": {
+          const port = msg.data?.port || DASHBOARD_PORT;
+          const metricsPort = msg.data?.metricsPort || METRICS_PORT;
+          dashboard.start(port, metricsPort);
+          return { type: "dashboard", data: { port, metricsPort }, success: true, id: msg.id };
+        }
+        case "dashboardStop": {
+          dashboard.stop();
+          return { type: "dashboardStop", success: true, id: msg.id };
+        }
+        case "moduleInstall": {
+          const path = await moduleManager.install(msg.data.module);
+          return { type: "moduleInstall", data: { path }, success: true, id: msg.id };
+        }
+        case "moduleUninstall": {
+          await moduleManager.uninstall(msg.data.module);
+          return { type: "moduleUninstall", success: true, id: msg.id };
+        }
+        case "moduleList": {
+          return { type: "moduleList", data: moduleManager.list(), success: true, id: msg.id };
+        }
+        case "daemonReload": {
+          if (!this.server) {
+            this.server = Bun.serve(this.getServerOpts());
+          } else {
+            this.server.reload(this.getServerOpts());
+          }
+          return { type: "daemonReload", data: `Daemon reloaded`, success: true, id: msg.id };
+        }
+        case "ping": {
+          return {
+            type: "pong",
+            data: { pid: process.pid, uptime: process.uptime() },
+            success: true,
+            id: msg.id,
+          };
+        }
+        case "kill": {
+          await pm.stopAll();
+          dashboard.stop();
+          clearInterval(metricsInterval);
+          setTimeout(() => process.exit(0), 200);
+          return { type: "kill", success: true, id: msg.id };
+        }
+        default:
+          return { type: "error", error: `Unknown command: ${(msg as any).type}`, success: false, id: msg.id };
+      }
+    } catch (err: Error | any) {
+      let error = err.message;
+
+      if (this.debugMode) {
+        error = `Message: ${err.message}\nStack: ${err.stack}`;
+        console.error(err, err.stack);
+      }
+
+      return { type: "error", error, success: false, id: msg.id };
+    }
   }
 }
 
-
-server = Bun.serve(serverOptions);
-
-console.log(`Listening on ${server.url}`);
+if (import.meta.main) {
+  const dm = new Daemon();
+  await dm.initialize();
+  const s = dm.startServer();
+  console.log(`Daemon listening on ${s.url}`);
+}
