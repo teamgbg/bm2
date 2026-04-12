@@ -35,6 +35,8 @@ import {
 import pidusage from "pidusage";
 import { readdir } from "node:fs/promises";
 import { pluginRegistry } from "./plugins/registry";
+import { ResourceMonitor } from "./resource-monitor";
+import { LogStreamPiper } from "./log-stream-piper";
 
 export class ProcessContainer {
   public id: number;
@@ -59,7 +61,8 @@ export class ProcessContainer {
   private cronManager: CronManager;
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
   private watcher: ReturnType<typeof import("fs").watch> | null = null;
-  private monitorInterval: ReturnType<typeof setInterval> | null = null;
+  private resourceMonitor = new ResourceMonitor();
+  private logStreamPiper: LogStreamPiper;
   private logRotateInterval: ReturnType<typeof setInterval> | null = null;
   private isRestarting: boolean = false;
 
@@ -78,6 +81,7 @@ export class ProcessContainer {
     this.clusterManager = clusterManager;
     this.healthChecker = healthChecker;
     this.cronManager = cronManager;
+    this.logStreamPiper = new LogStreamPiper((filePath, data) => this.logManager.appendLog(filePath, data));
     this.createdAt = Date.now();
   }
 
@@ -189,7 +193,7 @@ export class ProcessContainer {
     });
 
     this.pid = this.process.pid;
-    this.pipeOutput(logPaths);
+    this.logStreamPiper.pipeOutput(this.process, logPaths);
 
     this.process.exited.then((code) => {
       if (!this.isRestarting) {
@@ -225,10 +229,10 @@ export class ProcessContainer {
     this.pid = proc.pid;
 
     if (proc.stdout && typeof proc.stdout !== "number") {
-      this.pipeStream(proc.stdout, logPaths.outFile);
+      this.logStreamPiper.pipeStream(proc.stdout, logPaths.outFile);
     }
     if (proc.stderr && typeof proc.stderr !== "number") {
-      this.pipeStream(proc.stderr, logPaths.errFile);
+      this.logStreamPiper.pipeStream(proc.stderr, logPaths.errFile);
     }
 
     proc.exited.then((code) => {
@@ -296,32 +300,27 @@ export class ProcessContainer {
   }
 
   private startMonitoring() {
-    this.monitorInterval = setInterval(async () => {
-      if (!this.pid || this.status !== "online") return;
+    if (!this.pid) return;
 
-      try {
-        const stats = await pidusage(this.pid);
-        this.memory = stats.memory;
-        this.cpu = stats.cpu;
-
-        if (process.platform === "linux") {
-          try {
-            this.handles = (await readdir(`/proc/${this.pid}/fd`)).length;
-          } catch {}
-        }
+    this.resourceMonitor.start(
+      this.pid,
+      this.config.maxMemoryRestart,
+      (memory, cpu, handles) => {
+        this.memory = memory;
+        this.cpu = cpu;
+        this.handles = handles;
 
         for (const hook of pluginRegistry.getProcessContainerHooks()) {
           if (hook.onMetrics) {
-            hook.onMetrics({ memory: this.memory, cpu: this.cpu, handles: this.handles }, this);
+            hook.onMetrics({ memory, cpu, handles }, this);
           }
         }
-
-        if (this.config.maxMemoryRestart && this.memory > this.config.maxMemoryRestart) {
-          console.log(`[bm2] ${this.name} exceeded memory limit (${this.memory} > ${this.config.maxMemoryRestart}), restarting...`);
-          await this.restart();
-        }
-      } catch {}
-    }, MONITOR_INTERVAL);
+      },
+      async () => {
+        console.log(`[bm2] ${this.name} exceeded memory limit, restarting...`);
+        await this.restart();
+      }
+    );
   }
 
   private startLogRotation(logPaths: { outFile: string; errFile: string }) {
@@ -401,10 +400,7 @@ export class ProcessContainer {
   }
 
   private cleanupTimers() {
-    if (this.monitorInterval) {
-      clearInterval(this.monitorInterval);
-      this.monitorInterval = null;
-    }
+    this.resourceMonitor.stop();
     if (this.logRotateInterval) {
       clearInterval(this.logRotateInterval);
       this.logRotateInterval = null;
