@@ -158,8 +158,8 @@ export interface StartOptions {
 
 export interface EcosystemConfig {
   apps: StartOptions[];
-  deploy?: Record<string, DeployConfig>;
   noDaemon?: boolean;
+  deploy?: Record<string, DeployConfig>;
 }
 
 export interface DeployConfig {
