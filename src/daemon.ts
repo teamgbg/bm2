@@ -24,6 +24,7 @@ import {
   METRICS_PORT,
 } from "./constants";
 import { ensureDirs } from "./utils";
+import { existsSync, unlinkSync } from "node:fs";
 import type { DaemonMessage, DaemonResponse } from "./types";
 import type { Server } from "bun";
 
@@ -57,9 +58,8 @@ export default class Daemon {
     this.debugMode = this.args.includes("--debug");
 
     if (_daemonEnabled) {
-      const sock = Bun.file(DAEMON_SOCKET);
-      if (await sock.exists()) {
-        try { await sock.delete(); } catch {}
+      if (existsSync(DAEMON_SOCKET)) {
+        try { unlinkSync(DAEMON_SOCKET); } catch {}
       }
 
       await Bun.write(DAEMON_PID_FILE, String(process.pid));
