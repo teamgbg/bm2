@@ -1,7 +1,7 @@
 {
 	"name": "bm2",
 	"version": "1.0.36",
-	"description": "A blazing-fast, full-featured process manager built entirely on Bun native APIs. The modern PM2 replacement — zero Node.js dependencies, pure Bun performance.",
+	"description": "A blazing-fast, full-featured process manager built entirely on Bun native APIs. The modern PM2 replacement \u2014 zero Node.js dependencies, pure Bun performance.",
 	"main": "src/api.ts",
 	"module": "src/api.ts",
 	"types": "src/api.ts",
@@ -68,13 +68,13 @@
 	"dependencies": {
 		"cli-table3": "^0.6.5",
 		"pidusage": "^4.0.1",
-		"ws": "catalog:"
+		"ws": "*"
 	},
 	"devDependencies": {
-		"@types/bun": "catalog:",
+		"@types/bun": "*",
 		"@types/pidusage": "^2.0.5",
-		"@types/ws": "catalog:",
-		"bun-types": "catalog:",
-		"typescript": "catalog:"
+		"@types/ws": "*",
+		"bun-types": "*",
+		"typescript": "*"
 	}
 }
