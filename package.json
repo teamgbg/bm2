@@ -22,7 +22,7 @@
 		"start": "bun run src/index.ts",
 		"dev": "bun run --watch src/index.ts",
 		"test": "bun test",
-		"lint": "bun x tsc --noEmit",
+		"typecheck": "bun x tsc --noEmit",
 		"build:signal-protect": "gcc -o bin/bm2-signal-protect src/signal-protect.c",
 		"prepublishOnly": "bun test && bun run build:signal-protect"
 	},
