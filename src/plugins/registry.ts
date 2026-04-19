@@ -5,11 +5,12 @@
 
  * Singleton registry for BM2 plugins.
  */
-import type { ProcessContainerHooks, ProcessManagerHooks, CLICommand } from "./types";
+import type { ProcessContainerHooks, ProcessManagerHooks, CLICommand, DaemonHooks } from "./types";
 
 class BM2PluginRegistry {
   private processContainerHooks: ProcessContainerHooks[] = [];
   private processManagerHooks: ProcessManagerHooks[] = [];
+  private daemonHooks: DaemonHooks[] = [];
   private cliCommands: CLICommand[] = [];
 
   registerProcessContainerHooks(hooks: ProcessContainerHooks) {
@@ -18,6 +19,10 @@ class BM2PluginRegistry {
 
   registerProcessManagerHooks(hooks: ProcessManagerHooks) {
     this.processManagerHooks.push(hooks);
+  }
+
+  registerDaemonHooks(hooks: DaemonHooks) {
+    this.daemonHooks.push(hooks);
   }
 
   registerCLICommand(command: CLICommand) {
@@ -30,6 +35,10 @@ class BM2PluginRegistry {
 
   getProcessManagerHooks(): ProcessManagerHooks[] {
     return this.processManagerHooks;
+  }
+
+  getDaemonHooks(): DaemonHooks[] {
+    return this.daemonHooks;
   }
 
   getCLICommands(): CLICommand[] {

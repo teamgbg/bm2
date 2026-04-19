@@ -10,3 +10,4 @@ import "./resource-monitor";
 import "./log-stream-piper";
 import "./commands";
 import "./process-group-reaper";
+import "./startup-reconciliation";

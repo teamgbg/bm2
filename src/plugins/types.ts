@@ -30,6 +30,14 @@ export interface ProcessManagerHooks {
   onAfterStop?: (container: any) => void | Promise<void>;
 }
 
+export interface DaemonHooks {
+  onDaemonBoot?: (context: DaemonBootContext) => void | Promise<void>;
+}
+
+export interface DaemonBootContext {
+  ecosystemPath: string | undefined;
+}
+
 export interface CLICommand {
   name: string;
   aliases?: string[];

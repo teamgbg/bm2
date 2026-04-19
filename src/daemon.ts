@@ -18,6 +18,7 @@ import { ProcessManager } from "./process-manager";
 import { Dashboard } from "./dashboard";
 import { ModuleManager } from "./module-manager";
 import { ProbeManager } from "./probe-manager";
+import { pluginRegistry } from "./plugins/registry";
 import {
   DAEMON_SOCKET,
   DAEMON_PID_FILE,
@@ -84,6 +85,13 @@ export default class Daemon {
     for (const svc of services) {
       if (!PMProbeStates.has(svc.slug)) {
         PMProbeStates.set(svc.slug, { state: "starting", consecutiveFailures: 0, lastProbe: null });
+      }
+    }
+
+    const daemonHooks = pluginRegistry.getDaemonHooks();
+    for (const hooks of daemonHooks) {
+      if (hooks.onDaemonBoot) {
+        await hooks.onDaemonBoot();
       }
     }
 
