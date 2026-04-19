@@ -25,16 +25,25 @@ function h(label: string) {
   return color(label, "cyan");
 }
 
-function prettyStatus(status: ProcessStatus) {
-  switch (status) {
-    case "online": return color("● online", "green");
-    case "stopping": return color("● stopping", "yellow");
-    case "stopped": return color("● stopped", "dim");
-    case "errored": return color("● errored", "red");
-    case "launching": return color("● launching", "cyan");
-    case "waiting-restart": return color("● waiting", "yellow");
-    case "one-launch-status": return color("● once", "magenta");
-    default: return status;
+function prettyStatus(status: ProcessStatus, probeState?: string) {
+  const base = (() => {
+    switch (status) {
+      case "online": return color("● online", "green");
+      case "stopping": return color("● stopping", "yellow");
+      case "stopped": return color("● stopped", "dim");
+      case "errored": return color("● errored", "red");
+      case "launching": return color("● launching", "cyan");
+      case "waiting-restart": return color("● waiting", "yellow");
+      case "one-launch-status": return color("● once", "magenta");
+      default: return status;
+    }
+  })();
+  if (!probeState || probeState === "ok") return base;
+  switch (probeState) {
+    case "starting": return base + " " + color("○", "cyan") + " probe:starting";
+    case "degraded": return base + " " + color("●", "yellow") + " probe:degraded";
+    case "disabled": return base + " " + color("●", "red") + " probe:disabled";
+    default: return base;
   }
 }
 
@@ -99,10 +108,11 @@ export function printProcessTable(processes: ProcessState[]) {
 
   const table = new Table({
     head: [
-      h("id"), h("name"), h("namespace"), h("version"), h("mode"), 
-      h("pid"), h("uptime"), h("↺"), h("status"), h("cpu"), h("mem")
+      h("id"), h("name"), h("namespace"), h("version"), h("mode"),
+      h("pid"), h("uptime"), h("↺"), h("status"), h("cpu"), h("mem"),
+      h("probe")
     ],
-    colAligns: ["right","left","left","left","left","right","right","right","left","right","right"],
+    colAligns: ["right","left","left","left","left","right","right","right","left","right","right","left"],
     style: { border: ["dim"] },
     chars: minimalBorders(),
   });
@@ -116,6 +126,14 @@ export function printProcessTable(processes: ProcessState[]) {
       ? formatUptime(p.bm2_env.pm_uptime)
       : "-";
 
+    const probeState = p.probe?.state;
+    const probeStr = probeState
+      ? (probeState === "ok" ? color("ok", "green")
+        : probeState === "degraded" ? color("degraded", "yellow")
+        : probeState === "disabled" ? color("disabled", "red")
+        : probeState)
+      : "-";
+
     table.push([
       p.pm_id,
       highlightName(p),
@@ -125,9 +143,10 @@ export function printProcessTable(processes: ProcessState[]) {
       p.pid ?? "-",
       uptime,
       p.bm2_env.restart_time,
-      prettyStatus(p.status),
+      prettyStatus(p.status, probeState),
       prettyCpu(cpu),
-      prettyMemory(mem)
+      prettyMemory(mem),
+      probeStr
     ]);
   }
 

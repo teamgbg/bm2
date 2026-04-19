@@ -63,6 +63,8 @@ export interface ProcessDescription {
   healthCheckInterval?: number;
   healthCheckTimeout?: number;
   healthCheckMaxFails?: number;
+  // Render probe
+  canonicalProbeUrl?: string;
   // Log rotation
   logMaxSize?: number;
   logRetain?: number;
@@ -114,6 +116,12 @@ export interface ProcessState {
     version?: string;
     axm_monitor?: Record<string, any>;
     axm_actions?: any[];
+  };
+  probe?: {
+    state: "starting" | "ok" | "degraded" | "disabled";
+    consecutiveFailures: number;
+    lastProbe: string | null;
+    error?: string;
   };
 }
 

@@ -17,6 +17,7 @@
 import { ProcessManager } from "./process-manager";
 import { Dashboard } from "./dashboard";
 import { ModuleManager } from "./module-manager";
+import { ProbeManager } from "./probe-manager";
 import {
   DAEMON_SOCKET,
   DAEMON_PID_FILE,
@@ -34,6 +35,7 @@ export default class Daemon {
   pm: ProcessManager | null = null;
   dashboard: Dashboard | null = null;
   moduleManager: ModuleManager | null = null;
+  probeManager: ProbeManager | null = null;
   metricsInterval: NodeJS.Timeout | null = null;
   args = process.argv.slice(2);
   debugMode: boolean = false;
@@ -53,6 +55,7 @@ export default class Daemon {
     this.pm = new ProcessManager();
     this.dashboard = new Dashboard(this.pm);
     this.moduleManager = new ModuleManager(this.pm);
+    this.probeManager = new ProbeManager();
 
     this.args = process.argv.slice(2);
     this.debugMode = this.args.includes("--debug");
@@ -70,6 +73,33 @@ export default class Daemon {
     this.metricsInterval = setInterval(() => {
       this.pm!.getMetrics();
     }, 2000);
+
+    const { startServiceProbe, syncProbeServicesFromRegistry } = await import("./service-probe");
+
+    const services = await syncProbeServicesFromRegistry();
+
+    const PM = this.pm!;
+    const PMProbeStates = (PM as any)._probeStates as Map<string, { state: string; consecutiveFailures: number; lastProbe: string | null; error?: string }>;
+
+    for (const svc of services) {
+      if (!PMProbeStates.has(svc.slug)) {
+        PMProbeStates.set(svc.slug, { state: "starting", consecutiveFailures: 0, lastProbe: null });
+      }
+    }
+
+    startServiceProbe({
+      getServiceProbeEntry: (slug) => services.find((s) => s.slug === slug),
+      getProbeHealth: (slug) => {
+        const s = PMProbeStates.get(slug);
+        return s ? { status: s.state as any, consecutiveFailures: s.consecutiveFailures, lastProbe: s.lastProbe, error: s.error } : undefined;
+      },
+      updateProbeHealth: (slug, health) => {
+        PMProbeStates.set(slug, { state: health.status, consecutiveFailures: health.consecutiveFailures, lastProbe: health.lastProbe, error: health.error });
+      },
+      onDisabled: (slug) => {
+        console.log(`[daemon] service ${slug} disabled by probe — stopping process`);
+      },
+    });
 
     this.initialized = true;
   }

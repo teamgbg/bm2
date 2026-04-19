@@ -50,6 +50,8 @@ export class ProcessManager {
   public gracefulReload: GracefulReload;
   public registry: ProcessRegistry;
 
+  private _probeStates: Map<string, { state: "starting" | "ok" | "degraded" | "disabled"; consecutiveFailures: number; lastProbe: string | null; error?: string }> = new Map();
+
   constructor() {
     this.logManager = new LogManager();
     this.clusterManager = new ClusterManager();
@@ -58,6 +60,22 @@ export class ProcessManager {
     this.monitor = new Monitor();
     this.gracefulReload = new GracefulReload();
     this.registry = new ProcessRegistry();
+  }
+
+  setProbeState(name: string, state: "starting" | "ok" | "degraded" | "disabled", consecutiveFailures: number, lastProbe: string | null, error?: string): void {
+    this._probeStates.set(name, { state, consecutiveFailures, lastProbe, error });
+  }
+
+  getProbeState(name: string): { state: "starting" | "ok" | "degraded" | "disabled"; consecutiveFailures: number; lastProbe: string | null; error?: string } | undefined {
+    return this._probeStates.get(name);
+  }
+
+  clearProbeState(name?: string): void {
+    if (name) {
+      this._probeStates.delete(name);
+    } else {
+      this._probeStates.clear();
+    }
   }
 
   async start(options: StartOptions): Promise<ProcessState[]> {
@@ -307,11 +325,17 @@ export class ProcessManager {
   }
 
   list(): ProcessState[] {
-    return this.registry.list();
+    return this.registry.list().map((p) => {
+      const probeState = this._probeStates.get(p.name);
+      return probeState ? ({ ...p, probe: probeState } as ProcessState) : p;
+    });
   }
 
   describe(target: string | number): ProcessState[] {
-    return this.registry.describe(target);
+    return this.registry.describe(target).map((p) => {
+      const probeState = this._probeStates.get(p.name);
+      return probeState ? ({ ...p, probe: probeState } as ProcessState) : p;
+    });
   }
 
   async getLogs(target: string | number, lines: number = 20) {
