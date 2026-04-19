@@ -1,29 +1,33 @@
 {
-  "compilerOptions": {
-    // Environment setup & latest features
-    "lib": ["ESNext"],
-    "target": "ESNext",
-    "module": "Preserve",
-    "moduleDetection": "force",
-    "jsx": "react-jsx",
-    "allowJs": true,
-
-    // Bundler mode
-    "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
-    "verbatimModuleSyntax": true,
-    "noEmit": true,
-
-    // Best practices
-    "strict": true,
-    "skipLibCheck": true,
-    "noFallthroughCasesInSwitch": true,
-    "noUncheckedIndexedAccess": true,
-    "noImplicitOverride": true,
-
-    // Some stricter flags (disabled by default)
-    "noUnusedLocals": false,
-    "noUnusedParameters": false,
-    "noPropertyAccessFromIndexSignature": false
-  }
+	"_generated": {
+		"system": "bm2",
+		"status": "generated",
+		"edit": "change registry input, then regenerate",
+		"notes": "tsconfig.json — worker service, extends tsconfig.base.json. Compiler options, paths, include/exclude patterns come from service_manifest registry entry."
+	},
+	"extends": "./tsconfig.base.json",
+	"compilerOptions": {
+		"strict": true,
+		"skipLibCheck": true,
+		"jsx": "react-jsx",
+		"lib": [
+			"ESNext"
+		],
+		"module": "Preserve",
+		"allowJs": true,
+		"noUnusedLocals": false,
+		"moduleDetection": "force",
+		"noImplicitOverride": true,
+		"noUnusedParameters": false,
+		"verbatimModuleSyntax": true,
+		"noUncheckedIndexedAccess": true,
+		"allowImportingTsExtensions": true,
+		"noFallthroughCasesInSwitch": true,
+		"noPropertyAccessFromIndexSignature": false
+	},
+	"include": [
+		"src/**/*",
+		"prisma/generated/prisma/**/*",
+		"prisma/generated/orpc/**/*"
+	]
 }

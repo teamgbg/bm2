@@ -1,0 +1,19 @@
+{
+	"_generated": {
+		"system": "tsconfig-base",
+		"status": "generated",
+		"edit": "change registry input, then regenerate"
+	},
+	"compilerOptions": {
+		"target": "ESNext",
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"strict": true,
+		"skipLibCheck": true,
+		"noEmit": true,
+		"esModuleInterop": true,
+		"forceConsistentCasingInFileNames": true,
+		"isolatedModules": true,
+		"allowSyntheticDefaultImports": true
+	}
+}
