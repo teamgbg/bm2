@@ -15,6 +15,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { kill as processKill } from "node:process";
 import { pluginRegistry } from "./registry";
 import type { ProcessDescription } from "../types";
+import { daemonStartTime, setDaemonStartTime } from "./process-group-reaper";
 
 const GRACE_MS = 3000;
 
@@ -181,6 +182,7 @@ async function reconcile(): Promise<void> {
 
 pluginRegistry.registerDaemonHooks({
   onDaemonBoot: async () => {
+    setDaemonStartTime(Date.now());
     console.log("[bm2] startup-reconciliation: running orphan scan...");
     await reconcile();
   },

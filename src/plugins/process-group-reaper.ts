@@ -19,6 +19,12 @@ const SETSID_PATH = "/usr/bin/setsid";
 const REAPER_PGID_KEY = "__reaperPgid";
 const GRACE_MS = 3000;
 
+export let daemonStartTime = 0;
+
+export function setDaemonStartTime(ts: number): void {
+  daemonStartTime = ts;
+}
+
 function setsidAvailable(): boolean {
   return existsSync(SETSID_PATH);
 }
@@ -91,11 +97,36 @@ function isGroupAlive(pgid: number): boolean {
   }
 }
 
+function getProcessStartTime(pid: number): number {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf-8");
+    const start = stat.indexOf("(");
+    const end = stat.indexOf(")", start);
+    const afterComm = stat.substring(end + 2);
+    const fields = afterComm.split(" ");
+    const starttime = fields.length > 20 ? parseInt(fields[20] ?? "0", 10) : 0;
+    if (!starttime) return 0;
+    const uptime = readFileSync("/proc/uptime", "utf-8").split(" ")[0];
+    const uptimeSeconds = parseFloat(uptime);
+    const ticksPerSec = 100;
+    return Math.floor((uptimeSeconds - starttime / ticksPerSec) * 1000);
+  } catch {
+    return 0;
+  }
+}
+
+function isStaleOrphan(pid: number): boolean {
+  if (daemonStartTime === 0) return true;
+  const processStart = getProcessStartTime(pid);
+  if (processStart === 0) return true;
+  return processStart < daemonStartTime;
+}
+
 function killOrphanOnPort(port: number, serviceName: string): void {
   const holderPid = findPidHoldingPort(port);
   if (holderPid === null) return;
   if (holderPid === process.pid) return;
-  if (isBm2Tracked(holderPid)) {
+  if (isBm2Tracked(holderPid) && !isStaleOrphan(holderPid)) {
     console.log(
       `[reaper] port ${port} held by bm2-tracked pid=${holderPid}, skipping (live service)`
     );
