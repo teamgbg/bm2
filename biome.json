@@ -1,0 +1,88 @@
+{
+	"_generated": {
+		"system": "bm2",
+		"status": "generated",
+		"edit": "change registry input, then regenerate"
+	},
+	"$schema": "https://biomejs.dev/schemas/2.4.8/schema.json",
+	"vcs": {
+		"enabled": true,
+		"clientKind": "git",
+		"useIgnoreFile": true,
+		"defaultBranch": "main"
+	},
+	"files": {
+		"ignoreUnknown": false,
+		"ignore": [
+			"node_modules",
+			"dist",
+			"build",
+			".output",
+			"*.generated.*",
+			"public"
+		]
+	},
+	"formatter": {
+		"formatWithErrors": false,
+		"indentStyle": "tab",
+		"indentWidth": 2,
+		"lineEnding": "lf",
+		"lineWidth": 100
+	},
+	"json": {
+		"parser": {
+			"allowTrailingCommas": true
+		},
+		"formatter": {
+			"trailingCommas": "none"
+		}
+	},
+	"assist": {
+		"actions": {
+			"source": {
+				"organizeImports": "off"
+			}
+		}
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"recommended": true,
+			"correctness": {
+				"noUnusedImports": "error",
+				"noUnusedVariables": "error",
+				"useHookAtTopLevel": "warn"
+			},
+			"suspicious": {
+				"noExplicitAny": "off",
+				"noConsole": "error",
+				"noArrayIndexKey": "warn",
+				"noEmptyBlockStatements": "warn"
+			},
+			"style": {
+				"noNonNullAssertion": "warn"
+			},
+			"performance": {
+				"noBarrelFile": "error"
+			}
+		}
+	},
+	"css": {
+		"parser": {
+			"cssModules": true,
+			"allowWrongLineComments": true,
+			"tailwindDirectives": true
+		},
+		"formatter": {
+			"enabled": false
+		},
+		"linter": {
+			"enabled": false
+		}
+	},
+	"javascript": {
+		"parser": {
+			"unsafeParameterDecoratorsEnabled": true
+		}
+	}
+}

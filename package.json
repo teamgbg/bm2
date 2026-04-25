@@ -2,24 +2,22 @@
 	"_generated": {
 		"system": "bm2",
 		"status": "generated",
-		"edit": "change registry input, then regenerate"
+		"edit": "change registry input, then regenerate",
+		"notes": "package.json — worker service with no Vite/SSR. Scripts and @teamgbg/* dependencies come from service_manifest registry entry. All other dependencies are service-local and must be maintained manually."
 	},
 	"name": "bm2",
-	"type": "module",
 	"version": "1.0.0",
 	"private": true,
-	"scripts": {
-		"dev": "bun run --watch src/index.ts",
-		"test": "bun test",
-		"start": "bun run src/index.ts",
-		"typecheck": "bun x tsc --noEmit",
-		"prepublishOnly": "bun test && bun run build:signal-protect",
-		"build:signal-protect": "gcc -o bin/bm2-signal-protect src/signal-protect.c"
+	"type": "module",
+	"scripts": 	{
+			"dev": "bun run --watch src/index.ts",
+			"test": "bun test",
+			"start": "bun run src/index.ts",
+			"typecheck": "bun x tsc --noEmit",
+			"prepublishOnly": "bun test && bun run build:signal-protect",
+			"build:signal-protect": "gcc -o bin/bm2-signal-protect src/signal-protect.c"
 	},
-	"dependencies": {
-		"cli-table3": "*",
-		"pidusage": "*"
-	},
+	"dependencies": 	{},
 	"devDependencies": {
 		"@types/bun": "*",
 		"@sentry/bun": "*",
