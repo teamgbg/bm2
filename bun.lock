@@ -5,8 +5,6 @@
     "": {
       "name": "bm2",
       "dependencies": {
-        "@teamgbg/scala-guard": "*",
-        "@teamgbg/service-codegen-utils": "*",
         "cli-table3": "*",
         "pidusage": "*",
       },
@@ -17,10 +15,6 @@
         "typescript": "*",
       },
     },
-  },
-  "overrides": {
-    "@teamgbg/scala-guard": "*",
-    "@teamgbg/service-codegen-utils": "*",
   },
   "packages": {
     "@colors/colors": ["@colors/colors@1.5.0", "", {}, "sha512-ooWCrlZP11i8GImSjTHYHLkvFDP48nS4+204nGb1RiX/WXYHmJA2III9/e2DWVabCESdW7hBAEzHRqUn9OUVvQ=="],
@@ -144,10 +138,6 @@
     "@sentry/opentelemetry": ["@sentry/opentelemetry@10.50.0", "", { "dependencies": { "@sentry/core": "10.50.0" }, "peerDependencies": { "@opentelemetry/api": "^1.9.0", "@opentelemetry/core": "^1.30.1 || ^2.1.0", "@opentelemetry/sdk-trace-base": "^1.30.1 || ^2.1.0", "@opentelemetry/semantic-conventions": "^1.39.0" } }, "sha512-axn3pgDPveGdaMUC0abMCmFN7ux2pA5ebPufCef4lMIsyg7BBQvaEJ+vE19wjstMaBCAJGsdZlL3eeP2rtgRMw=="],
 
     "@standard-schema/spec": ["@standard-schema/spec@1.1.0", "", {}, "sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w=="],
-
-    "@teamgbg/scala-guard": ["@teamgbg/scala-guard@0.1.1", "https://npm.pkg.github.com/download/@teamgbg/scala-guard/0.1.1/ea2256a211680046a8eac72d7a71d782732a2136", { "dependencies": { "postgres": "*" }, "bin": { "portal-guard-column-validation": "src/portal-guards/column-validation.ts", "portal-guard-no-double-hydration": "src/portal-guards/no-double-hydration.ts", "portal-guard-no-hydration-mismatch": "src/portal-guards/no-hydration-mismatch.ts", "portal-guard-pg": "src/portal-guards/pg.ts", "portal-guard-registry-health": "src/portal-guards/registry-health.ts", "portal-guard-schema-coverage": "src/portal-guards/schema-coverage.ts", "scala-guard": "src/cli.ts" } }, "sha512-crPSGtdNok6L0UvXpNfUNmmlaX9VCiuZbWOPvogpgso9X1J/+RiGka4CIO90HbxqCbsqhWH5C6hiOSpZKgrJ5w=="],
-
-    "@teamgbg/service-codegen-utils": ["@teamgbg/service-codegen-utils@3.6.5", "https://npm.pkg.github.com/download/@teamgbg/service-codegen-utils/3.6.5/f580fe593b5d045c9a0db99c6686778df4a510c3", { "bin": { "build-from-registry": "src/build-from-registry.ts", "generate-env-example": "src/generate-env-example.ts", "generate-railway-json": "src/generate-railway-json.ts", "guard-codebase": "src/guard-cli.ts" } }, "sha512-M+zKVFisfzHnni26eE96nJQBomnrh5/I19/etqzCJUA9YAciVaqvqfzowt/LJ1dBYBdINChtjlQTgcXZmtPlgw=="],
 
     "@types/bun": ["@types/bun@1.3.13", "", { "dependencies": { "bun-types": "1.3.13" } }, "sha512-9fqXWk5YIHGGnUau9TEi+qdlTYDAnOj+xLCmSTwXfAIqXr2x4tytJb43E9uCvt09zJURKXwAtkoH4nLQfzeTXw=="],
 
@@ -370,8 +360,6 @@
     "@prisma/get-platform/@prisma/debug": ["@prisma/debug@7.2.0", "", {}, "sha512-YSGTiSlBAVJPzX4ONZmMotL+ozJwQjRmZweQNIq/ER0tQJKJynNkRB3kyvt37eOfsbMCXk3gnLF6J9OJ4QWftw=="],
 
     "@prisma/instrumentation/@opentelemetry/instrumentation": ["@opentelemetry/instrumentation@0.207.0", "", { "dependencies": { "@opentelemetry/api-logs": "0.207.0", "import-in-the-middle": "^2.0.0", "require-in-the-middle": "^8.0.0" }, "peerDependencies": { "@opentelemetry/api": "^1.3.0" } }, "sha512-y6eeli9+TLKnznrR8AZlQMSJT7wILpXH+6EYq5Vf/4Ao+huI7EedxQHwRgVUOMLFbe7VFDvHJrX9/f4lcwnJsA=="],
-
-    "@teamgbg/scala-guard/postgres": ["postgres@3.4.9", "", {}, "sha512-GD3qdB0x1z9xgFI6cdRD6xu2Sp2WCOEoe3mtnyB5Ee0XrrL5Pe+e4CCnJrRMnL1zYtRDZmQQVbvOttLnKDLnaw=="],
 
     "proper-lockfile/signal-exit": ["signal-exit@3.0.7", "", {}, "sha512-wnD2ZE+l+SPC/uoS0vXeE9L1+0wuaMqKlfz9AMUo38JsyLSBWSFcHR1Rri62LZc12vLr1gb3jl7iwQhgwpAbGQ=="],
 
