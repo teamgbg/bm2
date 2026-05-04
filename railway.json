@@ -1,0 +1,17 @@
+{
+	"_generated": {
+		"system": "bm2",
+		"status": "generated",
+		"edit": "change registry input, then regenerate"
+	},
+	"$schema": "https://railway.com/railway.schema.json",
+	"build": {
+		"builder": "RAILPACK",
+		"buildCommand": "bun x -y -p @teamgbg/scala-tools scala-tools deploy-build"
+	},
+	"deploy": {
+		"startCommand": "bun x -y -p @teamgbg/service-runtime service-runtime",
+		"healthcheckPath": "/health",
+		"healthcheckTimeout": 300
+	}
+}
