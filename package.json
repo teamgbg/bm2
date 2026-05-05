@@ -17,6 +17,8 @@
 		"build:signal-protect": "gcc -o bin/bm2-signal-protect src/signal-protect.c"
 	},
 	"dependencies": {
+		"@teamgbg/codegen-utils": "*",
+		"@teamgbg/scala-guard": "*",
 		"cli-table3": "*",
 		"pidusage": "*"
 	},
@@ -25,6 +27,10 @@
 		"@sentry/bun": "*",
 		"prisma": "*",
 		"typescript": "*"
+	},
+	"overrides": {
+		"@teamgbg/codegen-utils": "*",
+		"@teamgbg/scala-guard": "*"
 	}
 }
 
