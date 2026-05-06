@@ -10,8 +10,7 @@
 		"buildCommand": "bun x -y -p @teamgbg/scala-tools scala-tools deploy-build"
 	},
 	"deploy": {
-		"startCommand": "bun x -y -p @teamgbg/service-runtime service-runtime",
 		"healthcheckPath": "/health",
-		"healthcheckTimeout": 300
+		"healthcheckTimeout": 60
 	}
 }
