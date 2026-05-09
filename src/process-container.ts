@@ -368,7 +368,10 @@ export class ProcessContainer {
     }
   }
 
+  private lastExitCode: number | null = null;
+
   private handleExit(code: number | null) {
+    this.lastExitCode = code;
     const wasOnline = this.status === "online";
     this.status = code === 0 ? "stopped" : "errored";
     this.pid = undefined;
@@ -394,7 +397,40 @@ export class ProcessContainer {
         });
       }, delay);
     } else if (this.restartCount >= this.config.maxRestarts) {
-      console.log(`[bm2] ${this.name} reached max restarts (${this.config.maxRestarts}), not restarting`);
+      // Service is dead and we're done retrying. The right action is to
+      // STOP and surface a structured failure to the operator — not retry
+      // silently forever. Three signals:
+      //   1. stderr (captured by systemd journal)
+      //   2. ~/.bm2/failures.log — persistent operator-visible log of every
+      //      hard failure, append-only, survives daemon restarts
+      //   3. status=errored on the process row (visible in `bm2 list`)
+      const failure = {
+        timestamp: new Date().toISOString(),
+        event: "max_restarts_exhausted",
+        service: this.name,
+        attempts: this.restartCount,
+        maxRestarts: this.config.maxRestarts,
+        lastExitCode: this.lastExitCode ?? null,
+        cwd: this.config.cwd ?? null,
+        script: this.config.script ?? null,
+        message: `${this.name} crashed ${this.restartCount} times, max=${this.config.maxRestarts} — STOPPING. Manual intervention needed.`,
+      };
+      const line = `${failure.timestamp} ERROR ${failure.event} ${this.name} attempts=${this.restartCount}/${this.config.maxRestarts} exit=${failure.lastExitCode ?? "?"}\n`;
+      console.error(`[bm2-failure] ${JSON.stringify(failure)}`);
+      try {
+        const failuresLogPath = `${process.env.HOME ?? ""}/.bm2/failures.log`;
+        // appendFileSync would be cleaner; use Bun.file for consistency.
+        const existing = (() => {
+          try {
+            return require("node:fs").readFileSync(failuresLogPath, "utf-8");
+          } catch {
+            return "";
+          }
+        })();
+        require("node:fs").writeFileSync(failuresLogPath, existing + line);
+      } catch (err) {
+        console.error(`[bm2-failure] could not append to failures.log: ${err instanceof Error ? err.message : String(err)}`);
+      }
       this.status = "errored";
     }
   }

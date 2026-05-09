@@ -40,7 +40,13 @@ export const ALL_DIRS = [BM2_HOME, LOG_DIR, PID_DIR, METRICS_DIR, MODULE_DIR];
 
 export const DEFAULT_KILL_TIMEOUT = 5000;
 export const DEFAULT_MIN_UPTIME = 1000;
-export const DEFAULT_MAX_RESTARTS = 16;
+// Modern fail-fast default: try once, retry exactly twice for transient
+// hiccups (port-in-use blip, DB connection race), then STOP and notify the
+// operator. Silent endless retry is an anti-pattern — if a process fails
+// reliably, the right action is to surface the failure, not loop on it.
+// Per-service maxRestarts in service_env can override when a specific
+// process genuinely benefits from more retries.
+export const DEFAULT_MAX_RESTARTS = 3;
 export const DEFAULT_RESTART_DELAY = 0;
 export const DEFAULT_LOG_MAX_SIZE = 10 * 1024 * 1024; // 10MB
 export const DEFAULT_LOG_RETAIN = 5;
