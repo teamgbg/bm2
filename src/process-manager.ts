@@ -370,8 +370,13 @@ export class ProcessManager {
   async startEcosystem(config: EcosystemConfig): Promise<ProcessState[]> {
     const states: ProcessState[] = [];
     for (const app of config.apps) {
-      const result = await this.start(app);
-      states.push(...result);
+      try {
+        const result = await this.start(app);
+        states.push(...result);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[bm2] WARN: skipping app "${app.name}": ${msg}`);
+      }
     }
     return states;
   }
