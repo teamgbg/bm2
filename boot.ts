@@ -5,19 +5,17 @@
  * @edit edit directly
  *
  * Boot script for WSL2 startup. Generates the ecosystem config from
- * registry rows, installs dependencies for every service, then starts
- * BM2 with the ecosystem file.
+ * registry rows, then starts BM2 with the ecosystem file.
  *
- * The real BM2 (from npm) handles per-service crash isolation.
- * Custom plugins (reaper, reconciler) are installed as BM2 modules
- * and loaded automatically by the daemon on boot.
- *
- * Usage: bun run boot.ts [--mode development|production]
- *
- * --mode overrides the BM2_MODE env var (default: development).
+ * Boot does NOT install per-service dependencies — that is the
+ * canonical-pipeline concern of `bm2 restart <service>`. Boot trusts
+ * existing install state and starts every supervised service. A service
+ * with a stale node_modules surfaces its failure to its own log and
+ * is fixed by `bm2 restart <service>`, not by re-installing every
+ * service on every reboot.
  */
 
-import { existsSync, readFileSync } from "fs";
+import { existsSync } from "fs";
 import { join } from "path";
 
 const ECOSYSTEM_PATH =
@@ -55,32 +53,76 @@ async function boot() {
     process.exit(1);
   }
 
-  const ecosystem = JSON.parse(readFileSync(ECOSYSTEM_PATH, "utf-8"));
-  const apps = ecosystem.apps as Array<{ name: string; cwd: string }>;
-
-  console.log(`[boot] installing dependencies for ${apps.length} services...`);
-
-  let installFailures = 0;
-  for (const app of apps) {
-    if (!app.cwd || !existsSync(join(app.cwd, "package.json"))) continue;
-    console.log(`[boot]   ${app.name} (${app.cwd})`);
-    const exit = await run("bun", ["install"], app.cwd);
-    if (exit !== 0) installFailures++;
-  }
-
-  if (installFailures > 0) {
-    console.warn(`[boot] ${installFailures} service(s) failed to install, continuing...`);
-  }
-
   console.log(`[boot] starting BM2...`);
   const bm2Exit = await run("bm2", ["start", ECOSYSTEM_PATH], join(import.meta.dir, ".."));
 
-  if (bm2Exit !== 0) {
-    console.error("[boot] BM2 start failed");
+  // bm2 start returns non-zero if any individual service failed to spawn
+  // (missing binary, broken script path, etc.). That does NOT mean the daemon
+  // itself failed. Boot succeeds when the daemon is alive and supervising at
+  // least one service — per-service failures are bm2's own concern and are
+  // fixed by `bm2 restart <service>`. Probing the daemon is the verification
+  // that matters at the systemd boundary.
+  let onlineCount = 0;
+  for (let i = 0; i < 30; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    const probe = Bun.spawn(["bm2", "list"], { stdout: "pipe", stderr: "pipe" });
+    const probeOut = await new Response(probe.stdout).text();
+    await probe.exited;
+    onlineCount = (probeOut.match(/online/g) ?? []).length;
+    if (onlineCount > 0) break;
+  }
+  if (onlineCount === 0) {
+    console.error(`[boot] BM2 start failed — daemon reports no online services after 30s (bm2 start exit=${bm2Exit})`);
     process.exit(1);
   }
+  console.log(`[boot] online — daemon supervising ${onlineCount} services in ${mode} mode (bm2 start exit=${bm2Exit})`);
 
-  console.log(`[boot] done — ${apps.length} services started in ${mode} mode`);
+  // ── Type=simple supervision tail ────────────────────────────────────────────
+  // For systemd to apply Restart=always to the actual daemon (not just the
+  // boot script), this process must stay alive as long as the daemon does.
+  // We find bm2-daemon's PID and poll its existence; when it dies we exit
+  // non-zero, which triggers systemd's Restart=always.
+  //
+  // This is the modern shape: systemd supervises THIS process, this process
+  // monitors the daemon, daemon death → boot.ts exits → systemd respawns
+  // boot.ts → boot.ts re-runs codegen + bm2 start → daemon comes back.
+  // The bm2-watchdog.timer becomes redundant once this is in place.
+  const findDaemonPid = (): number | null => {
+    const r = Bun.spawnSync(["pgrep", "-f", "bm2/src/daemon.ts"]);
+    const out = new TextDecoder().decode(r.stdout).trim();
+    if (!out) return null;
+    const pid = parseInt(out.split("\n")[0]!, 10);
+    return Number.isFinite(pid) ? pid : null;
+  };
+  const pidIsAlive = (pid: number): boolean => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  let daemonPid = findDaemonPid();
+  if (!daemonPid) {
+    console.error("[boot] daemon PID not found via pgrep — cannot supervise; exiting (systemd will retry)");
+    process.exit(1);
+  }
+  console.log(`[boot] supervising bm2-daemon pid=${daemonPid}`);
+
+  while (true) {
+    await new Promise((r) => setTimeout(r, 5000));
+    if (!pidIsAlive(daemonPid!)) {
+      console.error(`[boot] bm2-daemon pid=${daemonPid} died — exiting so systemd can restart`);
+      process.exit(1);
+    }
+    // Recheck PID in case daemon was restarted by another path
+    const current = findDaemonPid();
+    if (current && current !== daemonPid) {
+      console.log(`[boot] daemon PID changed: ${daemonPid} → ${current}`);
+      daemonPid = current;
+    }
+  }
 }
 
 process.on("SIGTERM", async () => {
