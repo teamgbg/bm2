@@ -4,8 +4,10 @@
  * @status handwritten
  * @edit edit directly
  *
- * Boot script for WSL2 startup. Generates the ecosystem config from
- * registry rows, then starts BM2 with the ecosystem file.
+ * Boot script for WSL2 startup. Reads service_env + secret rows from the
+ * registry directly and starts BM2 with an in-memory ecosystem. There is
+ * NO codegen step and NO committed ecosystem JSON file. The DB IS the
+ * source of truth for what BM2 supervises.
  *
  * Boot does NOT install per-service dependencies — that is the
  * canonical-pipeline concern of `bm2 restart <service>`. Boot trusts
@@ -15,12 +17,14 @@
  * service on every reboot.
  */
 
-import { existsSync } from "fs";
+import { existsSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
+import { SQL } from "bun";
 
-const ECOSYSTEM_PATH =
-  process.env.BM2_ECOSYSTEM ||
-  join(import.meta.dir, "..", "infra-config", "ecosystem.bm2.local.json");
+// BM2's existing config-loader expects a file path; boot.ts writes the
+// ecosystem to a per-boot tmp file. The file is ephemeral, regenerated
+// on every boot from the DB, and never committed to git.
+const ECOSYSTEM_TMP = process.env.BM2_ECOSYSTEM || `/tmp/bm2-ecosystem-${process.pid}.json`;
 
 async function run(cmd: string, args: string[], cwd: string): Promise<number> {
   const proc = Bun.spawn([cmd, ...args], { cwd, stdout: "inherit", stderr: "inherit" });
@@ -31,30 +35,158 @@ async function run(cmd: string, args: string[], cwd: string): Promise<number> {
   return exit;
 }
 
+function loadDatabaseUrl(): string {
+  if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
+  const bootstrap = `${process.env.HOME}/.config/scala/bootstrap.env`;
+  if (existsSync(bootstrap)) {
+    const m = readFileSync(bootstrap, "utf8").match(/^DATABASE_URL=(.+)$/m);
+    if (m?.[1]) return m[1].replace(/^["']|["']$/g, "");
+  }
+  throw new Error("DATABASE_URL not set and ~/.config/scala/bootstrap.env missing");
+}
+
+async function buildEcosystemFromRegistry(mode: string): Promise<string> {
+  const sql = new SQL(loadDatabaseUrl());
+  try {
+    const services = await sql`
+      SELECT slug, config
+      FROM public.registry_entries
+      WHERE type = 'service_env' AND is_active = true
+    `;
+    if (services.length === 0) {
+      throw new Error("No active service_env rows in registry");
+    }
+    const secretRows = await sql`
+      SELECT config
+      FROM public.registry_entries
+      WHERE type = 'secret' AND is_active = true
+    `;
+    const sharedSecrets: Record<string, string> = {};
+    for (const row of secretRows) {
+      const cfg = (row.config ?? {}) as Record<string, unknown>;
+      for (const [k, v] of Object.entries(cfg)) {
+        if (typeof v === "string") sharedSecrets[k] = v;
+      }
+    }
+    const apps = services.map((entry: { slug: string; config: Record<string, unknown> }) => {
+      const cfg = entry.config;
+      const env: Record<string, string> = {};
+      if (Array.isArray(cfg.secrets)) {
+        for (const k of cfg.secrets as string[]) {
+          if (sharedSecrets[k]) env[k] = sharedSecrets[k];
+        }
+      }
+      if (cfg.env && typeof cfg.env === "object") {
+        Object.assign(env, cfg.env as Record<string, string>);
+      }
+      const svcMode = (cfg.mode as string) || "development";
+      const app: Record<string, unknown> = {
+        name: entry.slug,
+        cwd: cfg.cwd,
+        env,
+        autorestart: cfg.autorestart ?? false,
+        restartDelay: cfg.restartDelay ?? 2000,
+        maxRestarts: cfg.maxRestarts ?? 10,
+        minUptime: cfg.minUptime ?? 5000,
+        watch: false,
+        script: cfg.script,
+        interpreter: cfg.interpreter,
+      };
+      if (cfg.args) app.args = cfg.args;
+      if (svcMode === "production") {
+        app.env = { ...(app.env as Record<string, string>), NODE_ENV: "production" };
+      }
+      if (svcMode === "development" && cfg.interpreterArgs) {
+        app.interpreterArgs = cfg.interpreterArgs;
+      }
+      if (cfg.healthCheckUrl) {
+        app.healthCheckUrl = cfg.healthCheckUrl;
+        app.healthCheckInterval = cfg.healthCheckInterval;
+        app.healthCheckTimeout = cfg.healthCheckTimeout;
+        app.healthCheckMaxFails = cfg.healthCheckMaxFails;
+      }
+      if (cfg.canonicalProbeUrl) app.canonicalProbeUrl = cfg.canonicalProbeUrl;
+      if (cfg.maxMemoryRestart) app.maxMemoryRestart = cfg.maxMemoryRestart;
+      return app;
+    });
+    return JSON.stringify({ apps }, null, 2);
+  } finally {
+    await sql.end();
+  }
+}
+
 async function boot() {
   const mode = process.argv.find((a) => a.startsWith("--mode="))?.split("=")[1]
     || process.env.BM2_MODE
     || "development";
 
   console.log(`[boot] mode=${mode}`);
-  console.log(`[boot] generating ecosystem from database...`);
+  console.log(`[boot] reading service_env rows from registry...`);
 
-  const codegenExit = await run("scala-tools", [
-    "codegen", "run", "--output", "ecosystem",
-  ], join(import.meta.dir, ".."));
-
-  if (codegenExit !== 0) {
-    console.error("[boot] codegen failed, aborting");
+  let ecosystemJson: string;
+  try {
+    ecosystemJson = await buildEcosystemFromRegistry(mode);
+  } catch (err) {
+    console.error(`[boot] failed to read ecosystem from DB:`, err instanceof Error ? err.message : err);
     process.exit(1);
   }
+  writeFileSync(ECOSYSTEM_TMP, ecosystemJson);
+  console.log(`[boot] ecosystem materialised to ${ECOSYSTEM_TMP} from DB`);
 
-  if (!existsSync(ECOSYSTEM_PATH)) {
-    console.error(`[boot] ecosystem not found at ${ECOSYSTEM_PATH}`);
-    process.exit(1);
+  // Lazy-install: any app whose declared `script` artefact does not exist on
+  // disk gets installed via the canonical scala-tools deps install before BM2
+  // tries to spawn it. Boot stays fast in the steady state (no installs when
+  // node_modules is already populated), AND becomes self-healing when a
+  // service was wiped or never bootstrapped — without needing manual
+  // `bm2 restart <service>` after every reboot. Per `wsl2-boot-chain`'s
+  // intent (fast boot) plus the operator's reliability requirement (every
+  // declared service runs after reboot).
+  const ecosystem = JSON.parse(ecosystemJson) as { apps: Array<Record<string, unknown>> };
+  const apps = ecosystem.apps ?? [];
+  const needsInstall: Array<{ name: string; cwd: string }> = [];
+  for (const app of apps) {
+    const cwd = app.cwd as string | undefined;
+    const script = app.script as string | undefined;
+    const name = app.name as string | undefined;
+    if (!cwd || !script || !name) continue;
+    if (!existsSync(`${cwd}/package.json`)) continue;
+    const scriptPath = script.startsWith("/") ? script : `${cwd}/${script}`;
+    if (!existsSync(scriptPath)) needsInstall.push({ name, cwd });
+  }
+  if (needsInstall.length > 0) {
+    console.log(`[boot] ${needsInstall.length} services missing install artefacts; installing in parallel: ${needsInstall.map((s) => s.name).join(", ")}`);
+    // Tell scala-tools deps install how many siblings are in flight so it
+    // can divide bun's network-concurrency budget across them and avoid
+    // hammering a single-process Verdaccio v6.
+    const peers = String(needsInstall.length);
+    const installs = needsInstall.map(async ({ name, cwd }) => {
+      const start = Date.now();
+      const proc = Bun.spawn(["bun", "x", "scala-tools", "deps", "install"], {
+        cwd,
+        stdout: "inherit",
+        stderr: "inherit",
+        env: {
+          ...process.env,
+          BM2_INTERNAL_INSTALL: "1",
+          SCALA_INSTALL_PARALLEL_PEERS: peers,
+        },
+      });
+      const exit = await proc.exited;
+      const sec = ((Date.now() - start) / 1000).toFixed(1);
+      console.log(`[boot] install ${name}: exit=${exit} (${sec}s)`);
+      return { name, exit };
+    });
+    const results = await Promise.all(installs);
+    const failed = results.filter((r) => r.exit !== 0);
+    if (failed.length > 0) {
+      console.warn(`[boot] ${failed.length} services failed to install: ${failed.map((r) => r.name).join(", ")} — they will not start, but boot continues so the rest go online`);
+    }
+  } else {
+    console.log(`[boot] every app's script artefact is present on disk; no installs needed`);
   }
 
   console.log(`[boot] starting BM2...`);
-  const bm2Exit = await run("bm2", ["start", ECOSYSTEM_PATH], join(import.meta.dir, ".."));
+  const bm2Exit = await run("bm2", ["start", ECOSYSTEM_TMP], join(import.meta.dir, ".."));
 
   // bm2 start returns non-zero if any individual service failed to spawn
   // (missing binary, broken script path, etc.). That does NOT mean the daemon
