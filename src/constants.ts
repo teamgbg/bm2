@@ -48,6 +48,9 @@ export const DEFAULT_MIN_UPTIME = 1000;
 // process genuinely benefits from more retries.
 export const DEFAULT_MAX_RESTARTS = 3;
 export const DEFAULT_RESTART_DELAY = 0;
+export const DEFAULT_BACKOFF_BASE_MS = 1000;
+export const DEFAULT_BACKOFF_MAX_MS = 30000;
+export const DEFAULT_BACKOFF_JITTER_PCT = 0.25;
 export const DEFAULT_LOG_MAX_SIZE = 10 * 1024 * 1024; // 10MB
 export const DEFAULT_LOG_RETAIN = 5;
 export const MONITOR_INTERVAL = 1000;
