@@ -40,6 +40,7 @@ import { readdir } from "node:fs/promises";
 import { pluginRegistry } from "./plugins/registry";
 import { ResourceMonitor } from "./resource-monitor";
 import { LogStreamPiper } from "./log-stream-piper";
+import { createFailureSurfacer, type FailureSurfacer } from "./failure-surfacer";
 
 export class ProcessContainer {
   public id: number;
@@ -68,6 +69,7 @@ export class ProcessContainer {
   private logStreamPiper: LogStreamPiper;
   private logRotateInterval: ReturnType<typeof setInterval> | null = null;
   private isRestarting: boolean = false;
+  private failureSurfacer: FailureSurfacer;
 
   constructor(
     id: number,
@@ -75,7 +77,8 @@ export class ProcessContainer {
     logManager: LogManager,
     clusterManager: ClusterManager,
     healthChecker: HealthChecker,
-    cronManager: CronManager
+    cronManager: CronManager,
+    failureSurfacer?: FailureSurfacer
   ) {
     this.id = id;
     this.name = config.name;
@@ -84,6 +87,7 @@ export class ProcessContainer {
     this.clusterManager = clusterManager;
     this.healthChecker = healthChecker;
     this.cronManager = cronManager;
+    this.failureSurfacer = failureSurfacer ?? createFailureSurfacer();
     this.logStreamPiper = new LogStreamPiper((filePath, data) => this.logManager.appendLog(filePath, data));
     this.createdAt = Date.now();
   }
@@ -381,7 +385,7 @@ export class ProcessContainer {
     return Math.min(Math.max(jittered, 0), DEFAULT_BACKOFF_MAX_MS);
   }
 
-  private handleExit(code: number | null) {
+  private async handleExit(code: number | null) {
     this.lastExitCode = code;
     const wasOnline = this.status === "online";
     this.status = code === 0 ? "stopped" : "errored";
@@ -412,33 +416,24 @@ export class ProcessContainer {
       }, delay);
     } else if (this.restartCount >= this.config.maxRestarts) {
       const elapsed = Date.now() - this.firstFailureAt;
-      const failure = {
-        timestamp: new Date().toISOString(),
-        event: "max_restarts_exhausted",
-        service: this.name,
-        attempts: this.restartCount,
-        maxRestarts: this.config.maxRestarts,
-        lastExitCode: this.lastExitCode ?? null,
-        elapsedMs: elapsed,
-        cwd: this.config.cwd ?? null,
-        script: this.config.script ?? null,
-        message: `${this.name} crashed ${this.restartCount} times, max=${this.config.maxRestarts} — STOPPING. Manual intervention needed.`,
-      };
-      const line = `${failure.timestamp} ERROR ${failure.event} ${this.name} attempts=${this.restartCount}/${this.config.maxRestarts} exit=${failure.lastExitCode ?? "?"} elapsedMs=${elapsed}\n`;
-      console.error(`[bm2-failure] ${JSON.stringify(failure)}`);
+      let lastLogLines: string[] = [];
       try {
-        const failuresLogPath = `${process.env.HOME ?? ""}/.bm2/failures.log`;
-        const existing = (() => {
-          try {
-            return require("node:fs").readFileSync(failuresLogPath, "utf-8");
-          } catch {
-            return "";
-          }
-        })();
-        require("node:fs").writeFileSync(failuresLogPath, existing + line);
-      } catch (err) {
-        console.error(`[bm2-failure] could not append to failures.log: ${err instanceof Error ? err.message : String(err)}`);
-      }
+        const logs = await this.logManager.readLogs(this.name, this.id, 50, this.config.outFile, this.config.errorFile);
+        lastLogLines = [...logs.out.split("\n").filter(Boolean), ...logs.err.split("\n").filter(Boolean)].slice(-50);
+      } catch {}
+
+      this.failureSurfacer.surface({
+        serviceSlug: this.name,
+        exitCode: this.lastExitCode,
+        attemptCount: this.restartCount,
+        maxRestarts: this.config.maxRestarts,
+        elapsedMs: elapsed,
+        lastLogLines,
+        script: this.config.script ?? null,
+        cwd: this.config.cwd ?? null,
+      }).catch((err) => {
+        console.error(`[bm2-failure] surfacer failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
       this.status = "errored";
     }
   }

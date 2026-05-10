@@ -21,6 +21,7 @@ import type {
   MetricSnapshot,
 } from "./types";
 import { ProcessContainer } from "./process-container";
+import { createFailureSurfacer, type FailureSurfacer, type FailureSurfacerDeps } from "./failure-surfacer";
 import { ProcessRegistry } from "./process-registry";
 import { save, resurrect } from "./process-persistence";
 import { LogManager } from "./log-manager";
@@ -49,10 +50,11 @@ export class ProcessManager {
   public monitor: Monitor;
   public gracefulReload: GracefulReload;
   public registry: ProcessRegistry;
+  public failureSurfacer: FailureSurfacer;
 
   private _probeStates: Map<string, { state: "starting" | "ok" | "degraded" | "disabled"; consecutiveFailures: number; lastProbe: string | null; error?: string }> = new Map();
 
-  constructor() {
+  constructor(surfacerDeps?: FailureSurfacerDeps) {
     this.logManager = new LogManager();
     this.clusterManager = new ClusterManager();
     this.healthChecker = new HealthChecker();
@@ -60,6 +62,7 @@ export class ProcessManager {
     this.monitor = new Monitor();
     this.gracefulReload = new GracefulReload();
     this.registry = new ProcessRegistry();
+    this.failureSurfacer = createFailureSurfacer(surfacerDeps);
   }
 
   setProbeState(name: string, state: "starting" | "ok" | "degraded" | "disabled", consecutiveFailures: number, lastProbe: string | null, error?: string): void {
@@ -119,7 +122,8 @@ export class ProcessManager {
           this.logManager,
           this.clusterManager,
           this.healthChecker,
-          this.cronManager
+          this.cronManager,
+          this.failureSurfacer
         );
 
         this.registry.add(container);
@@ -139,7 +143,8 @@ export class ProcessManager {
         this.logManager,
         this.clusterManager,
         this.healthChecker,
-        this.cronManager
+        this.cronManager,
+        this.failureSurfacer
       );
 
       this.registry.add(container);
