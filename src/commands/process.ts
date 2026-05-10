@@ -88,58 +88,17 @@ export async function cmdReload(args: string[]) {
 }
 
 export async function cmdDelete(args: string[]) {
-  // Hardened against the deletion-footgun where a typo'd or stale name
-  // silently no-ops (or, due to a daemon bug, wipes everything). Three
-  // changes vs the prior shape:
-  //   1. No-arg invocation EXITS instead of defaulting to "all".
-  //   2. "all" requires explicit `--all` flag to confirm intent.
-  //   3. Named target that matches no live process EXITS 1 with a clear
-  //      "no such process: X" — never silently succeeds.
-  const target = args[0];
-  const explicitAll = args.includes("--all") || target === "--all";
+  const target = args[0] || "all";
+  const type = target === "all" ? "deleteAll" : "delete";
+  const data = target === "all" ? undefined : { target };
 
-  if (!target && !explicitAll) {
-    console.error(colorize("Error: bm2 delete requires a process name or --all", "red"));
-    console.error("       bm2 delete <name>     # delete one named process");
-    console.error("       bm2 delete --all      # delete every process (DESTRUCTIVE)");
-    process.exit(1);
-  }
-
-  if (explicitAll || target === "all") {
-    if (!explicitAll) {
-      console.error(colorize("Error: bm2 delete all is forbidden — use --all to confirm intent", "red"));
-      console.error("       bm2 delete --all     # delete every process (DESTRUCTIVE)");
-      process.exit(1);
-    }
-    const res = await sendToDaemon({ type: "deleteAll" });
-    if (!res.success) {
-      console.error(colorize(`Error: ${res.error}`, "red"));
-      process.exit(1);
-    }
-    console.log(colorize("✓ Deleted (all)", "green"));
-    printProcessTable(res.data);
-    return;
-  }
-
-  // Named target: probe first, refuse if no match. Closes the silent-no-op
-  // path where a typo passed the named-delete branch but matched nothing.
-  const listRes = await sendToDaemon({ type: "list" });
-  if (listRes.success && Array.isArray(listRes.data)) {
-    const known: string[] = listRes.data.map((p: any) => p?.name).filter((n: any) => typeof n === "string");
-    const matches = known.filter((n) => n === target || n.startsWith(`${target}-`));
-    if (matches.length === 0) {
-      console.error(colorize(`Error: no such process: "${target}"`, "red"));
-      console.error(`       known processes: ${known.length === 0 ? "(none)" : known.join(", ")}`);
-      process.exit(1);
-    }
-  }
-
-  const res = await sendToDaemon({ type: "delete", data: { target } });
+  const res = await sendToDaemon({ type, data });
   if (!res.success) {
     console.error(colorize(`Error: ${res.error}`, "red"));
-    process.exit(1);
+    process?.exit(1);
   }
-  console.log(colorize(`✓ Deleted: ${target}`, "green"));
+  
+  console.log(colorize("✓ Deleted", "green"));
   printProcessTable(res.data);
 }
 
