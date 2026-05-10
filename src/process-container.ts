@@ -31,6 +31,9 @@ import {
   MONITOR_INTERVAL,
   DEFAULT_LOG_MAX_SIZE,
   DEFAULT_LOG_RETAIN,
+  DEFAULT_BACKOFF_BASE_MS,
+  DEFAULT_BACKOFF_MAX_MS,
+  DEFAULT_BACKOFF_JITTER_PCT,
 } from "./constants";
 import pidusage from "pidusage";
 import { readdir } from "node:fs/promises";
@@ -369,6 +372,14 @@ export class ProcessContainer {
   }
 
   private lastExitCode: number | null = null;
+  private firstFailureAt: number = 0;
+
+  private computeBackoffMs(attempt: number): number {
+    const base = DEFAULT_BACKOFF_BASE_MS * Math.pow(2, attempt);
+    const jitter = base * DEFAULT_BACKOFF_JITTER_PCT;
+    const jittered = base + (Math.random() * 2 - 1) * jitter;
+    return Math.min(Math.max(jittered, 0), DEFAULT_BACKOFF_MAX_MS);
+  }
 
   private handleExit(code: number | null) {
     this.lastExitCode = code;
@@ -387,23 +398,20 @@ export class ProcessContainer {
       }
 
       this.status = "waiting-restart";
-      const delay = this.config.restartDelay || 0;
+      if (this.restartCount === 0) {
+        this.firstFailureAt = Date.now();
+      }
+      const delay = this.computeBackoffMs(this.restartCount);
 
       this.restartTimer = setTimeout(() => {
         this.restartCount++;
-        console.log(`[bm2] Restarting ${this.name} (attempt ${this.restartCount}/${this.config.maxRestarts})`);
+        console.log(`[bm2] Restarting ${this.name} (attempt ${this.restartCount}/${this.config.maxRestarts}) after ${Math.round(delay)}ms`);
         this.start().catch((err) => {
           console.error(`[bm2] Failed to restart ${this.name}:`, err);
         });
       }, delay);
     } else if (this.restartCount >= this.config.maxRestarts) {
-      // Service is dead and we're done retrying. The right action is to
-      // STOP and surface a structured failure to the operator — not retry
-      // silently forever. Three signals:
-      //   1. stderr (captured by systemd journal)
-      //   2. ~/.bm2/failures.log — persistent operator-visible log of every
-      //      hard failure, append-only, survives daemon restarts
-      //   3. status=errored on the process row (visible in `bm2 list`)
+      const elapsed = Date.now() - this.firstFailureAt;
       const failure = {
         timestamp: new Date().toISOString(),
         event: "max_restarts_exhausted",
@@ -411,15 +419,15 @@ export class ProcessContainer {
         attempts: this.restartCount,
         maxRestarts: this.config.maxRestarts,
         lastExitCode: this.lastExitCode ?? null,
+        elapsedMs: elapsed,
         cwd: this.config.cwd ?? null,
         script: this.config.script ?? null,
         message: `${this.name} crashed ${this.restartCount} times, max=${this.config.maxRestarts} — STOPPING. Manual intervention needed.`,
       };
-      const line = `${failure.timestamp} ERROR ${failure.event} ${this.name} attempts=${this.restartCount}/${this.config.maxRestarts} exit=${failure.lastExitCode ?? "?"}\n`;
+      const line = `${failure.timestamp} ERROR ${failure.event} ${this.name} attempts=${this.restartCount}/${this.config.maxRestarts} exit=${failure.lastExitCode ?? "?"} elapsedMs=${elapsed}\n`;
       console.error(`[bm2-failure] ${JSON.stringify(failure)}`);
       try {
         const failuresLogPath = `${process.env.HOME ?? ""}/.bm2/failures.log`;
-        // appendFileSync would be cleaner; use Bun.file for consistency.
         const existing = (() => {
           try {
             return require("node:fs").readFileSync(failuresLogPath, "utf-8");
