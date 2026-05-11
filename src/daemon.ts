@@ -20,6 +20,7 @@ import { ModuleManager } from "./module-manager";
 import { ProbeManager } from "./probe-manager";
 import { pluginRegistry } from "./plugins/registry";
 import "./plugins";
+import { setDaemonStartTime } from "./plugins/process-group-reaper";
 import {
   DAEMON_SOCKET,
   DAEMON_PID_FILE,
@@ -54,6 +55,7 @@ export default class Daemon {
     await ensureDirs();
 
     this.daemonEnabled = _daemonEnabled;
+    setDaemonStartTime(Date.now());
     this.pm = new ProcessManager();
     this.dashboard = new Dashboard(this.pm);
     this.moduleManager = new ModuleManager(this.pm);
