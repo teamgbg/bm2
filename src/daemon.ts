@@ -19,6 +19,7 @@ import { Dashboard } from "./dashboard";
 import { ModuleManager } from "./module-manager";
 import { ProbeManager } from "./probe-manager";
 import { pluginRegistry } from "./plugins/registry";
+import "./plugins";
 import {
   DAEMON_SOCKET,
   DAEMON_PID_FILE,
