@@ -36,7 +36,8 @@ function readPgid(pid: number): number | null {
     const end = stat.indexOf(")", start);
     const afterComm = stat.substring(end + 2);
     const fields = afterComm.split(" ");
-    const pgrp = fields[1];
+    // /proc/pid/stat post-(comm) fields (0-indexed): state, ppid, pgrp, session, ...
+    const pgrp = fields[2];
     if (pgrp === undefined) return null;
     return parseInt(pgrp, 10);
   } catch {
