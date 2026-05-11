@@ -185,6 +185,18 @@ async function boot() {
     console.log(`[boot] every app's script artefact is present on disk; no installs needed`);
   }
 
+  // Reap any pre-existing bm2-daemon process before we start. Without this,
+  // `bm2 start` discovers an existing daemon (left over from another shell's
+  // `bm2 boot` — common when an agent in a tmux pane started its own daemon)
+  // and reuses it instead of spawning one in our cgroup. Children then inherit
+  // the wrong cgroup, the `enforce-bm2-slice` gate refuses them, and recovery
+  // requires manual intervention. Reaping first makes boot.ts always own the
+  // daemon spawn so the daemon inherits OUR cgroup (bm2-local.service →
+  // Slice=bm2.slice via the drop-in).
+  console.log(`[boot] reaping any pre-existing bm2 daemons (orphan-class prevention)`);
+  Bun.spawnSync(["pkill", "-9", "-f", "bm2/src/daemon.ts"], { stdout: "ignore", stderr: "ignore" });
+  await new Promise((r) => setTimeout(r, 500));
+
   console.log(`[boot] starting BM2...`);
   const bm2Exit = await run("bm2", ["start", ECOSYSTEM_TMP], join(import.meta.dir, ".."));
 
@@ -234,10 +246,32 @@ async function boot() {
       return false;
     }
   };
+  // The supervised daemon MUST live in bm2-local.service's cgroup (which
+  // inherits Slice=bm2.slice via the systemd drop-in). Any other cgroup —
+  // `app-tmux.slice/tmux-spawn-*.scope`, anything else — means the daemon
+  // was spawned by another shell and we're about to "supervise" an orphan
+  // whose children fail the `enforce-bm2-slice` gate. Refuse to attach and
+  // let systemd restart us; the reaper at the top of boot() then kills the
+  // orphan before we re-run `bm2 start`, which now spawns OUR daemon.
+  const daemonCgroupOK = (pid: number): boolean => {
+    try {
+      const cg = readFileSync(`/proc/${pid}/cgroup`, "utf-8");
+      return /\/bm2-local\.service|\/bm2\.slice\b/.test(cg);
+    } catch {
+      return false;
+    }
+  };
 
   let daemonPid = findDaemonPid();
   if (!daemonPid) {
     console.error("[boot] daemon PID not found via pgrep — cannot supervise; exiting (systemd will retry)");
+    process.exit(1);
+  }
+  if (!daemonCgroupOK(daemonPid)) {
+    let cg = "";
+    try { cg = readFileSync(`/proc/${daemonPid}/cgroup`, "utf-8").trim(); } catch {}
+    console.error(`[boot] daemon pid=${daemonPid} is in wrong cgroup (${cg}) — orphan from another shell. Killing and exiting so systemd respawns clean.`);
+    try { process.kill(daemonPid, "SIGKILL"); } catch {}
     process.exit(1);
   }
   console.log(`[boot] supervising bm2-daemon pid=${daemonPid}`);
@@ -251,6 +285,11 @@ async function boot() {
     // Recheck PID in case daemon was restarted by another path
     const current = findDaemonPid();
     if (current && current !== daemonPid) {
+      if (!daemonCgroupOK(current)) {
+        console.error(`[boot] daemon PID changed to ${current} which is in wrong cgroup — orphan. Killing and exiting.`);
+        try { process.kill(current, "SIGKILL"); } catch {}
+        process.exit(1);
+      }
       console.log(`[boot] daemon PID changed: ${daemonPid} → ${current}`);
       daemonPid = current;
     }
